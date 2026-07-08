@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+
+# Build
+.next/
+out/
+dist/
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+prisma/dev.db
+prisma/dev.db-shm
+prisma/dev.db-wal
+
+# Local storage
+storage-data/
+
+# Logs
+*.log
+dev.log
+
+# Archives & patches (local artifacts)
+*.tar.gz
+*.patch
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# TypeScript
+tsconfig.tsbuildinfo
+
+# Testing
+coverage/

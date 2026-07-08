@@ -1,0 +1,89 @@
+# Doma Cloud — production docker-compose for the mini-PC.
+#
+# Bring up with:
+#   cp .env.example .env  &&  edit .env
+#   docker compose up -d --build
+#
+# The compose file runs:
+#   - doma        : Next.js app (built standalone) — port 3000
+#   - webdav      : WebDAV server (Bun)            — port 3001
+#   - caddy       : reverse proxy with auto self-signed HTTPS on the LAN
+#
+# Storage is mounted from the BTRFS RAID1 array at /mnt/raid/doma.
+# Adjust the path to match your setup.
+
+services:
+  doma:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # Persistent SQLite database
+      - doma-db:/app/db
+      # File storage (BTRFS RAID1 mount point)
+      - ${STORAGE_LOCAL_ROOT:-/mnt/raid/doma}:/data/doma-storage
+      # Read-only timezone
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - doma-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/setup/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  webdav:
+    image: oven/bun:1-slim
+    restart: unless-stopped
+    depends_on:
+      - doma
+    working_dir: /app
+    env_file: .env
+    volumes:
+      # WebDAV mini-service code
+      - ./mini-services/webdav:/app
+      # Shared storage — MUST match the doma service mount
+      - ${STORAGE_LOCAL_ROOT:-/mnt/raid/doma}:/data/doma-storage
+      # Shared database — read/write access to the same SQLite file
+      - doma-db:/app/db
+      - /etc/localtime:/etc/localtime:ro
+    command: >
+      sh -c "cd /app && bun install --production && bun run index.ts"
+    networks:
+      - doma-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3001/webdav-health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - doma
+      - webdav
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile.prod:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      - DOMA_DOMAIN=${DOMA_DOMAIN:-mini-pc.local}
+    networks:
+      - doma-net
+
+volumes:
+  doma-db:
+  caddy-data:
+  caddy-config:
+
+networks:
+  doma-net:
+    driver: bridge

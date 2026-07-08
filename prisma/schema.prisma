@@ -1,0 +1,84 @@
+// Doma Cloud — Prisma schema
+// Family cloud storage with multi-user accounts, sharing, trash, quotas.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String    @id @default(cuid())
+  username       String    @unique
+  displayName    String
+  passwordHash   String
+  role           String    @default("user") // "admin" | "user"
+  quotaBytes     BigInt    @default(53687091200) // 50 GB by default (matches settings.ts)
+  usedBytes      BigInt    @default(0)
+  // Profile
+  birthday       DateTime? // для именинного режима
+  themePreference String?  // "light" | "dark" | "system"
+  // Security — incremented on password change to invalidate old sessions.
+  tokenVersion   Int       @default(0)
+  // Audit
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  lastLoginAt    DateTime?
+
+  files  FileNode[]
+  shares Share[]
+}
+
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model FileNode {
+  id          String    @id @default(cuid())
+  ownerId     String
+  parent      FileNode? @relation("FileTree", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: Cascade)
+  parentId    String?
+  children    FileNode[] @relation("FileTree")
+  name        String    // display name (utf-8)
+  storageKey  String    // unique key in storage (e.g. <ownerId>/<fileId>/<originalName>)
+  isDirectory Boolean   @default(false)
+  sizeBytes   BigInt    @default(0)
+  mimeType    String    @default("application/octet-stream")
+  hashSha256  String?
+  // Trash
+  deletedAt   DateTime?
+  deletedBy   String?
+  // Audit
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  owner  User    @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  shares Share[]
+
+  @@index([ownerId, parentId])
+  @@index([ownerId, deletedAt])
+  @@index([storageKey])
+}
+
+model Share {
+  id           String    @id @default(cuid())
+  fileId       String
+  token        String    @unique
+  passwordHash String?
+  expiresAt    DateTime?
+  oneTimeUse   Boolean   @default(false)
+  usedCount    Int       @default(0)
+  maxViews     Int?
+  createdBy    String
+  createdAt    DateTime  @default(now())
+
+  file FileNode @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  user User     @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+
+  @@index([fileId])
+}

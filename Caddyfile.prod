@@ -1,0 +1,79 @@
+# Doma Cloud — production Caddyfile.
+#
+# Serves the app on HTTPS with a self-signed certificate for LAN use.
+# Browsers will warn once, then trust the cert going forward.
+#
+# Routing:
+#   /dav/*  → webdav:3001  (WebDAV для файловых менеджеров)
+#   /*      → doma:3000    (основное приложение)
+
+{
+    admin off
+    auto_https disable_redirects
+    default_sni {$DOMA_DOMAIN:mini-pc.local}
+}
+
+# HTTPS via self-signed cert (LAN).
+:443 {
+    tls internal {
+        on_demand
+    }
+
+    encode zstd gzip
+
+    # Large upload limit — 50 GB per request (for big videos via WebDAV).
+    request_body {
+        max_size 50GB
+    }
+
+    # WebDAV routes — proxy to the webdav mini-service.
+    @webdav {
+        path /dav* /webdav-health
+    }
+    handle @webdav {
+        reverse_proxy webdav:3001 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            flush_interval -1
+        }
+    }
+
+    # Everything else → main app.
+    handle {
+        reverse_proxy doma:3000 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            flush_interval -1
+        }
+    }
+}
+
+# HTTP redirect (optional — keep HTTP available for LAN clients that don't trust the cert).
+:80 {
+    @webdav {
+        path /dav* /webdav-health
+    }
+    handle @webdav {
+        reverse_proxy webdav:3001 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            flush_interval -1
+        }
+    }
+
+    handle {
+        reverse_proxy doma:3000 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            flush_interval -1
+        }
+    }
+}

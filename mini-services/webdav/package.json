@@ -1,0 +1,12 @@
+{
+  "name": "doma-webdav",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "bun --hot run index.ts",
+    "start": "bun run index.ts"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3"
+  }
+}
