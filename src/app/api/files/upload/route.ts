@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth/session";
 import { getStorage, buildStorageKey } from "@/lib/storage";
 import { sanitizeName, computeDirectorySize } from "@/lib/cloud/tree";
 import { guessMime } from "@/lib/cloud/mime";
+import { rateLimit, LIMITS } from "@/lib/auth/rate-limit";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -31,6 +32,18 @@ export async function POST(req: NextRequest) {
   const session = await getSession();
   if (!session) {
     return NextResponse.json({ error: "Не авторизован" }, { status: 401 });
+  }
+
+  // Rate limit — 100 uploads/min per user.
+  const rl = rateLimit(`upload:${session.sub}`, LIMITS.upload.limit, LIMITS.upload.windowMs);
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: "Слишком много загрузок. Попробуйте через минуту." },
+      {
+        status: 429,
+        headers: { "Retry-After": String(Math.ceil((rl.resetAt - Date.now()) / 1000)) },
+      }
+    );
   }
 
   const url = new URL(req.url);

@@ -49,11 +49,24 @@ export function FileContextMenu(props: Props) {
   const [menuPos, setMenuPos] = React.useState<{ x: number; y: number } | null>(null);
 
   // Detect if this was triggered by touch (long-press) — show manual popover.
+  // We use a small delay to let Radix try its native ContextMenu first on
+  // desktop right-click; if a contextmenu event fires in that window, we
+  // assume Radix handled it and don't show the manual popover (otherwise
+  // both menus would appear simultaneously on desktop).
   React.useEffect(() => {
-    // If x/y are within typical touch zones and no ContextMenu event fires,
-    // show the popover. We use a small delay to let Radix try first.
-    const timer = setTimeout(() => setMenuPos({ x, y }), 50);
-    return () => clearTimeout(timer);
+    let cancelled = false;
+    const onNativeContextMenu = () => {
+      cancelled = true;
+    };
+    window.addEventListener("contextmenu", onNativeContextMenu, { once: true });
+    const timer = setTimeout(() => {
+      window.removeEventListener("contextmenu", onNativeContextMenu);
+      if (!cancelled) setMenuPos({ x, y });
+    }, 80);
+    return () => {
+      window.removeEventListener("contextmenu", onNativeContextMenu);
+      clearTimeout(timer);
+    };
   }, [x, y]);
 
   // Close popover on outside click / scroll / Esc.

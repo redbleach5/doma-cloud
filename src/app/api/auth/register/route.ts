@@ -78,12 +78,13 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // First registered user becomes admin with full quota (3 TB).
-  // Subsequent users get the default quota from system settings.
+  // First registered user becomes admin with full quota (configured via
+  // the adminQuotaBytes setting, default 3 TB). Subsequent users get the
+  // default quota from system settings.
   const isAdmin = userCount === 0;
   const { getSetting } = await import("@/lib/cloud/settings");
   const quotaBytes = isAdmin
-    ? BigInt(3 * 1024 * 1024 * 1024 * 1024) // 3 TB for admin
+    ? await getSetting("adminQuotaBytes")
     : await getSetting("defaultQuotaBytes");
 
   const passwordHash = await hashPassword(password);

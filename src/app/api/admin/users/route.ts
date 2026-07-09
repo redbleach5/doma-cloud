@@ -82,7 +82,7 @@ export async function POST(req: NextRequest) {
   const finalQuota = quotaBytes
     ? BigInt(quotaBytes)
     : finalRole === "admin"
-      ? 3n * 1024n * 1024n * 1024n * 1024n // 3 TB for admins
+      ? await getSetting("adminQuotaBytes")
       : await getSetting("defaultQuotaBytes");
 
   const passwordHash = await hashPassword(password);

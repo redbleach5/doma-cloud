@@ -3,7 +3,7 @@ import { Transform } from "node:stream";
 import { db } from "@/lib/db";
 import { getSession, verifyPassword } from "@/lib/auth/session";
 import { getStorage } from "@/lib/storage";
-import { rateLimit, getClientIp } from "@/lib/auth/rate-limit";
+import { rateLimit, getClientIp, LIMITS } from "@/lib/auth/rate-limit";
 
 /**
  * Stream a file to the client with proper Range support for media playback.
@@ -36,7 +36,7 @@ export async function GET(
   // Prevents abuse (e.g. scraping all shared files) without affecting legit use.
   // Range requests for media playback also count, but 200/min is generous.
   const ip = getClientIp(req);
-  const rl = rateLimit(`download:${ip}`, 200, 60_000);
+  const rl = rateLimit(`download:${ip}`, LIMITS.download.limit, LIMITS.download.windowMs);
   if (!rl.allowed) {
     return NextResponse.json(
       { error: "Слишком много запросов. Попробуйте позже." },

@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { getSession } from "@/lib/auth/session";
-import { hashPassword, verifyPassword } from "@/lib/auth/session";
+import { getSession, hashPassword } from "@/lib/auth/session";
 import { z } from "zod";
 import { nanoid } from "nanoid";
 

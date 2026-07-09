@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { getStorage } from "@/lib/storage";
-import { purgeSubtree, computeDirectorySize } from "@/lib/cloud/tree";
 import { z } from "zod";
 
 const PatchSchema = z.object({
@@ -123,7 +122,3 @@ export async function DELETE(
 
   return NextResponse.json({ ok: true, purgedFiles: files.length });
 }
-
-// silence unused import — purgeSubtree is used by the files API, kept here for reference
-void purgeSubtree;
-void computeDirectorySize;

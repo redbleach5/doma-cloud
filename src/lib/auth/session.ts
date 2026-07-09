@@ -30,6 +30,17 @@ function getSecret(): Uint8Array {
     console.warn("[auth] DOMA_JWT_SECRET not set, using ephemeral dev secret (DEV ONLY).");
     return new TextEncoder().encode("doma-dev-secret-do-not-use-in-prod-" + process.cwd());
   }
+  // Reject placeholder values copied verbatim from .env.example — these are
+  // documented defaults that must be replaced before deployment.
+  if (raw === "replace-me-with-a-strong-random-secret-please") {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error(
+        "DOMA_JWT_SECRET is still the .env.example placeholder. Refusing to start.\n" +
+          "Generate a real secret: openssl rand -base64 48"
+      );
+    }
+    console.warn("[auth] DOMA_JWT_SECRET is the .env.example placeholder — replace it before production.");
+  }
   if (raw.length < 32) {
     console.warn(
       `[auth] DOMA_JWT_SECRET is only ${raw.length} chars. Recommend ≥ 32 chars (run: openssl rand -base64 48).`

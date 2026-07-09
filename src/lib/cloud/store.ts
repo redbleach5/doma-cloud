@@ -18,12 +18,6 @@ interface CloudState {
   layout: Layout;
   setLayout: (l: Layout) => void;
 
-  // Multi-select
-  selected: Set<string>;
-  toggleSelected: (id: string) => void;
-  clearSelected: () => void;
-  selectMany: (ids: string[]) => void;
-
   // Upload progress overlay
   uploadVisible: boolean;
   setUploadVisible: (v: boolean) => void;
@@ -34,14 +28,13 @@ export const useCloudStore = create<CloudState>((set) => ({
   pushFolder: (id, name) =>
     set((s) => ({ path: [...s.path, { id, name }] })),
   popTo: (index) =>
-    set((s) => ({ path: s.path.slice(0, index + 1), selected: new Set() })),
-  reset: () => set({ path: [{ id: null, name: "Дом" }], selected: new Set() }),
+    set((s) => ({ path: s.path.slice(0, index + 1) })),
+  reset: () => set({ path: [{ id: null, name: "Дом" }] }),
 
   view: "files",
   setView: (v) =>
     set({
       view: v,
-      selected: new Set(),
       // Only reset path when switching to files/trash views.
       path:
         v === "files"
@@ -53,17 +46,6 @@ export const useCloudStore = create<CloudState>((set) => ({
 
   layout: "grid",
   setLayout: (l) => set({ layout: l }),
-
-  selected: new Set(),
-  toggleSelected: (id) =>
-    set((s) => {
-      const next = new Set(s.selected);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return { selected: next };
-    }),
-  clearSelected: () => set({ selected: new Set() }),
-  selectMany: (ids) => set({ selected: new Set(ids) }),
 
   uploadVisible: false,
   setUploadVisible: (v) => set({ uploadVisible: v }),

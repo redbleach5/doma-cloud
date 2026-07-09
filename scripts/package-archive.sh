@@ -4,8 +4,11 @@
 
 set -euo pipefail
 
-PROJECT_DIR="/home/z/my-project"
-OUTPUT_DIR="/home/z/my-project/download"
+# Resolve project root from the script's own location, so the script works
+# on any machine — not just the original development environment.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+OUTPUT_DIR="${DOMA_ARCHIVE_OUTPUT:-"$PROJECT_DIR/../download"}"
 ARCHIVE_NAME="doma-cloud"
 VERSION=$(date +%Y%m%d)
 ARCHIVE="${OUTPUT_DIR}/${ARCHIVE_NAME}-${VERSION}.tar.gz"
@@ -13,6 +16,8 @@ ARCHIVE="${OUTPUT_DIR}/${ARCHIVE_NAME}-${VERSION}.tar.gz"
 mkdir -p "$OUTPUT_DIR"
 
 echo "Packaging Doma Cloud → $ARCHIVE"
+echo "  Project: $PROJECT_DIR"
+echo "  Output:  $OUTPUT_DIR"
 
 # Create the archive, excluding build/runtime artifacts.
 # We keep: src/, prisma/, public/, mini-services/, scripts/,

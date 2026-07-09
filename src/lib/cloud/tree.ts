@@ -19,30 +19,6 @@ export interface FileNodeRow {
   updatedAt: Date;
 }
 
-/** Resolve a path like "/Photos/2026/July" into a parentId (or null for root). */
-export async function resolvePath(
-  ownerId: string,
-  pathSegments: string[]
-): Promise<string | null> {
-  if (pathSegments.length === 0) return null; // root
-  let parentId: string | null = null;
-  for (const segment of pathSegments) {
-    const node = await db.fileNode.findFirst({
-      where: {
-        ownerId,
-        parentId,
-        name: segment,
-        isDirectory: true,
-        deletedAt: null,
-      },
-      select: { id: true },
-    });
-    if (!node) return undefined as unknown as string | null; // not found — caller should handle
-    parentId = node.id;
-  }
-  return parentId;
-}
-
 /** List immediate children of a folder (or root if parentId is null). */
 export async function listChildren(
   ownerId: string,

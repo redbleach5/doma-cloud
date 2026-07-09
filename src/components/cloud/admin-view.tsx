@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { api, type CurrentUser, type AdminUser, type AdminStats, type SystemSettings } from "@/lib/cloud/api";
+import { api, type CurrentUser, type AdminUser, type SystemSettings } from "@/lib/cloud/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -21,7 +21,7 @@ import {
   Users, BarChart3, Settings as SettingsIcon, Shield, Plus, Edit2,
   KeyRound, Trash2, Loader2, HardDrive, Activity, Crown, Save,
 } from "lucide-react";
-import { formatBytes, formatDate, formatRelative } from "@/lib/cloud/format";
+import { formatBytes } from "@/lib/cloud/format";
 
 interface Props {
   currentUser: CurrentUser;
@@ -635,6 +635,7 @@ function SystemSettingsTab() {
   });
 
   const [defaultQuotaGB, setDefaultQuotaGB] = React.useState("50");
+  const [adminQuotaGB, setAdminQuotaGB] = React.useState("3072");
   const [registrationOpen, setRegistrationOpen] = React.useState(true);
   const [trashDays, setTrashDays] = React.useState("30");
   const [saving, setSaving] = React.useState(false);
@@ -643,6 +644,7 @@ function SystemSettingsTab() {
     if (data) {
       const s: SystemSettings = data.settings;
       setDefaultQuotaGB(String(Math.round(Number(s.defaultQuotaBytes) / (1024 * 1024 * 1024))));
+      setAdminQuotaGB(String(Math.round(Number(s.adminQuotaBytes) / (1024 * 1024 * 1024))));
       setRegistrationOpen(s.registrationOpen);
       setTrashDays(String(s.trashRetentionDays));
     }
@@ -652,8 +654,10 @@ function SystemSettingsTab() {
     setSaving(true);
     try {
       const defaultQuotaBytes = BigInt(Math.round(parseFloat(defaultQuotaGB) * 1024 * 1024 * 1024)).toString();
+      const adminQuotaBytes = BigInt(Math.round(parseFloat(adminQuotaGB) * 1024 * 1024 * 1024)).toString();
       await api.adminUpdateSettings({
         defaultQuotaBytes,
+        adminQuotaBytes,
         registrationOpen,
         trashRetentionDays: parseInt(trashDays, 10),
       });
@@ -698,7 +702,23 @@ function SystemSettingsTab() {
           />
           <p className="text-xs text-muted-foreground">
             Выдаётся новым пользователям при самостоятельной регистрации.
-            Администраторы всегда получают 3 ТБ.
+          </p>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="adminQuota">Квота администратора (ГБ)</Label>
+          <Input
+            id="adminQuota"
+            type="number"
+            min="1"
+            step="1"
+            value={adminQuotaGB}
+            onChange={(e) => setAdminQuotaGB(e.target.value)}
+            className="h-11 max-w-32"
+          />
+          <p className="text-xs text-muted-foreground">
+            Выдаётся первому пользователю (он становится администратором) и всем
+            новым аккаунтам с ролью «admin».
           </p>
         </div>
 
@@ -748,6 +768,3 @@ function plural(n: number, one: string, few: string, many: string): string {
   if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return few;
   return many;
 }
-
-void formatDate;
-void formatRelative;

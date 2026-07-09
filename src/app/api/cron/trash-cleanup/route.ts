@@ -29,6 +29,14 @@ export async function POST(req: NextRequest) {
       { status: 503 }
     );
   }
+  // Reject the .env.example placeholder — it's documented as a default and
+  // must be replaced before the cron endpoint is allowed to do anything.
+  if (expectedSecret === "replace-me-with-a-random-cron-secret") {
+    return NextResponse.json(
+      { error: "CRON_SECRET is still the .env.example placeholder — endpoint disabled" },
+      { status: 503 }
+    );
+  }
   const providedSecret = req.headers.get("x-cron-secret");
   if (providedSecret !== expectedSecret) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -78,7 +86,6 @@ export async function POST(req: NextRequest) {
       }
       try {
         await storage.delete(node.storageKey);
-        freedBytes += 0n; // already counted above
       } catch {
         // best-effort
       }

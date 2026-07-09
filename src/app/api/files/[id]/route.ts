@@ -68,8 +68,11 @@ export async function DELETE(
  * This preserves "were they deleted with the parent or independently?".
  */
 async function markDescendantsDeleted(nodeId: string, userId: string, deletedAt: Date) {
+  // Only mark NON-deleted descendants. Children that were already in the
+  // trash (independently of this folder) must keep their original deletedAt
+  // so they stay in trash when this folder is restored.
   const children = await db.fileNode.findMany({
-    where: { parentId: nodeId },
+    where: { parentId: nodeId, deletedAt: null },
     select: { id: true },
   });
   for (const child of children) {

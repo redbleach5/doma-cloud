@@ -38,11 +38,3 @@ export function formatRelative(date: Date | string | null | undefined): string {
   if (day < 30) return `${Math.floor(day / 7)} нед назад`;
   return formatDate(d);
 }
-
-/** Split a path string like "/Photos/2026" into breadcrumbs. */
-export function parsePath(pathname: string): string[] {
-  return pathname
-    .split("/")
-    .map((s) => decodeURIComponent(s))
-    .filter(Boolean);
-}

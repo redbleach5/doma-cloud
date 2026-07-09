@@ -12,18 +12,18 @@ export async function GET() {
   return NextResponse.json({
     settings: {
       defaultQuotaBytes: settings.defaultQuotaBytes.toString(),
+      adminQuotaBytes: settings.adminQuotaBytes.toString(),
       registrationOpen: settings.registrationOpen,
       trashRetentionDays: settings.trashRetentionDays,
-      maxChunkSizeBytes: settings.maxChunkSizeBytes.toString(),
     },
   });
 }
 
 const PatchSchema = z.object({
   defaultQuotaBytes: z.string().optional(),
+  adminQuotaBytes: z.string().optional(),
   registrationOpen: z.boolean().optional(),
   trashRetentionDays: z.number().int().min(0).max(3650).optional(),
-  maxChunkSizeBytes: z.string().optional(),
 });
 
 /** PATCH — update system settings. */
@@ -47,27 +47,27 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ error: "Неверный размер квоты" }, { status: 422 });
     }
   }
+  if (parsed.data.adminQuotaBytes !== undefined) {
+    try {
+      await setSetting("adminQuotaBytes", BigInt(parsed.data.adminQuotaBytes));
+    } catch {
+      return NextResponse.json({ error: "Неверный размер админ-квоты" }, { status: 422 });
+    }
+  }
   if (parsed.data.registrationOpen !== undefined) {
     await setSetting("registrationOpen", parsed.data.registrationOpen);
   }
   if (parsed.data.trashRetentionDays !== undefined) {
     await setSetting("trashRetentionDays", parsed.data.trashRetentionDays);
   }
-  if (parsed.data.maxChunkSizeBytes !== undefined) {
-    try {
-      await setSetting("maxChunkSizeBytes", BigInt(parsed.data.maxChunkSizeBytes));
-    } catch {
-      return NextResponse.json({ error: "Неверный размер чанка" }, { status: 422 });
-    }
-  }
 
   const settings = await getAllSettings();
   return NextResponse.json({
     settings: {
       defaultQuotaBytes: settings.defaultQuotaBytes.toString(),
+      adminQuotaBytes: settings.adminQuotaBytes.toString(),
       registrationOpen: settings.registrationOpen,
       trashRetentionDays: settings.trashRetentionDays,
-      maxChunkSizeBytes: settings.maxChunkSizeBytes.toString(),
     },
   });
 }

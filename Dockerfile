@@ -41,5 +41,8 @@ RUN mkdir -p /app/db /data/doma-storage \
 USER nextjs
 EXPOSE 3000
 
-# Apply DB schema on startup, then start the server.
-CMD ["sh", "-c", "bunx prisma db push --skip-generate && node server.js"]
+# Apply DB schema on startup only if the DB is empty (first boot), then start
+# the server. Running `prisma db push` on every restart is slow and risky
+# (it can require --accept-data-loss if the schema diverges). On subsequent
+# boots the DB is already in sync — no migration needed.
+CMD ["sh", "-c", "if [ ! -f /app/db/doma.db ]; then bunx prisma db push --skip-generate; fi && node server.js"]

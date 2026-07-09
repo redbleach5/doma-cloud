@@ -79,4 +79,5 @@ export const LIMITS = {
   register: { limit: 5, windowMs: 60_000 },        // 5 registrations/min per IP
   shareVerify: { limit: 20, windowMs: 60_000 },    // 20 password attempts/min per IP+share
   upload: { limit: 100, windowMs: 60_000 },         // 100 uploads/min per user
+  download: { limit: 200, windowMs: 60_000 },       // 200 downloads/min per IP (incl. Range)
 } as const;

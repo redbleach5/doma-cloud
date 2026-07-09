@@ -308,9 +308,9 @@ export const api = {
 
   async adminUpdateSettings(input: Partial<{
     defaultQuotaBytes: string;
+    adminQuotaBytes: string;
     registrationOpen: boolean;
     trashRetentionDays: number;
-    maxChunkSizeBytes: string;
   }>): Promise<{ settings: SystemSettings }> {
     const res = await fetch("/api/admin/settings", {
       method: "PATCH",
@@ -377,9 +377,9 @@ export interface AdminStats {
 
 export interface SystemSettings {
   defaultQuotaBytes: string;
+  adminQuotaBytes: string;
   registrationOpen: boolean;
   trashRetentionDays: number;
-  maxChunkSizeBytes: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -432,13 +432,15 @@ async function uploadSingle(
 /**
  * Chunked upload — splits the file into CHUNK_SIZE pieces and POSTs each one.
  *
- * Each chunk request body is ≤5 MB, so the server's `formData()` / body
- * parser only ever buffers a tiny amount. The server concatenates chunks
- * into the final file when the last one arrives.
+ * Each chunk request body is ≤5 MB, so the server's body parser only ever
+ * buffers a tiny amount. The server concatenates chunks into the final file
+ * when the last one arrives.
  *
  * Resumable: if a chunk fails, we retry up to MAX_CHUNK_RETRIES times.
- * If the user closes the tab, the server keeps the partial temp file;
- * a future re-upload with the same X-Upload-Id could resume (TODO).
+ * The server persists upload-session metadata (parentId, fileName, fileSize)
+ * to disk under <storage-root>/.uploads/<user>/<uploadId>/session.json on
+ * the first chunk, so subsequent chunks are bound to that initial context
+ * and can't be hijacked into a different folder.
  */
 async function uploadChunked(
   file: File,

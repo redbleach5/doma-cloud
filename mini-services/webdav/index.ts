@@ -30,8 +30,6 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createReadStream, createWriteStream } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { Readable, PassThrough } from "node:stream";
-import { lookup as mimeLookup } from "node:path"; // placeholder, real lookup below
 
 // --- Конфигурация ---
 
@@ -58,7 +56,11 @@ const DAV_PREFIX = "/dav";
 
 let db: Database;
 try {
-  db = new Database(DB_PATH);
+  // safeIntegers: true → SQLite BIGINT columns are returned as JS BigInt
+  // instead of number. Without this, quotas > 2^53 bytes (≈9 PB) lose
+  // precision. Prisma on the main app side uses BigInt natively; this
+  // keeps the WebDAV service consistent with that.
+  db = new Database(DB_PATH, { safeIntegers: true });
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA busy_timeout = 5000");
   db.exec("PRAGMA synchronous = NORMAL");
@@ -88,8 +90,10 @@ interface UserRow {
   displayName: string;
   passwordHash: string;
   role: string;
-  quotaBytes: number; // SQLite returns number for BIGINT with bun:sqlite
-  usedBytes: number;
+  // BigInt (Database is opened with safeIntegers: true). Quotas can exceed
+  // 2^53 (Number.MAX_SAFE_INTEGER), so we must NOT downgrade to number.
+  quotaBytes: bigint;
+  usedBytes: bigint;
 }
 
 interface FileNodeRow {
@@ -99,7 +103,7 @@ interface FileNodeRow {
   name: string;
   storageKey: string;
   isDirectory: number; // 0 or 1
-  sizeBytes: number;
+  sizeBytes: bigint;
   mimeType: string;
   hashSha256: string | null;
   deletedAt: string | null;
@@ -337,7 +341,9 @@ function buildResponseEntry(href: string, node: FileNodeRow | "root", _user: Use
   const isRoot = node === "root";
   const isDir = isRoot || node.isDirectory === 1;
   const name = isRoot ? "Doma" : node.name;
-  const size = isRoot ? 0 : node.sizeBytes;
+  // Stringify BigInt explicitly — `${bigint}` works, but a plain BigInt in a
+  // template literal would throw in some JSON/XML serialisers.
+  const size = isRoot ? "0" : node.sizeBytes.toString();
   const lastModified = isRoot ? new Date().toISOString() : node.updatedAt;
   const contentType = isDir ? "httpd/unix-directory" : (isRoot ? "" : (node.mimeType || "application/octet-stream"));
 
@@ -507,9 +513,10 @@ async function handlePut(req: Request, user: UserRow, urlPath: string): Promise<
   if (existing === null) {
     const contentLength = parseInt(req.headers.get("content-length") ?? "0", 10);
     if (contentLength > 0) {
-      const usedRow = db.query("SELECT usedBytes FROM User WHERE id = ?").get(user.id) as { usedBytes: number } | null;
-      const quotaRow = db.query("SELECT quotaBytes FROM User WHERE id = ?").get(user.id) as { quotaBytes: number } | null;
-      if (usedRow && quotaRow && usedRow.usedBytes + contentLength > quotaRow.quotaBytes) {
+      // BigInt-aware quota check — usedBytes/quotaBytes are BIGINT in SQLite.
+      const usedRow = db.query("SELECT usedBytes FROM User WHERE id = ?").get(user.id) as { usedBytes: bigint } | null;
+      const quotaRow = db.query("SELECT quotaBytes FROM User WHERE id = ?").get(user.id) as { quotaBytes: bigint } | null;
+      if (usedRow && quotaRow && usedRow.usedBytes + BigInt(contentLength) > quotaRow.quotaBytes) {
         return new Response("Quota exceeded", { status: 413 });
       }
     }
@@ -521,7 +528,8 @@ async function handlePut(req: Request, user: UserRow, urlPath: string): Promise<
   // Stream the request body to disk — never buffer in memory.
   const writeStream = createWriteStream(filePath);
   const hash = createHash("sha256");
-  let sizeBytes = 0;
+  // BigInt to match the FileNode.sizeBytes column type (safeIntegers mode).
+  let sizeBytes = 0n;
 
   try {
     const body = req.body;
@@ -531,7 +539,7 @@ async function handlePut(req: Request, user: UserRow, urlPath: string): Promise<
         const { done, value } = await reader.read();
         if (done) break;
         hash.update(value);
-        sizeBytes += value.byteLength;
+        sizeBytes += BigInt(value.byteLength);
         writeStream.write(value);
       }
     }
@@ -642,7 +650,14 @@ async function handleDelete(_req: Request, user: UserRow, urlPath: string): Prom
 
 function markDeletedRecursive(nodeId: string, userId: string, now: string) {
   db.query("UPDATE FileNode SET deletedAt = ?, deletedBy = ? WHERE id = ?").run(now, userId, nodeId);
-  const children = db.query("SELECT id FROM FileNode WHERE parentId = ?").all(nodeId) as { id: string }[];
+  // Only recurse into NON-deleted children. Children that were already in
+  // the trash (independently of this folder) keep their original deletedAt
+  // so they stay in trash when this folder is restored.
+  // ownerId filter is defensive — guarantees we never touch another user's
+  // files even if a foreign-key invariant is somehow violated.
+  const children = db.query(
+    "SELECT id FROM FileNode WHERE parentId = ? AND ownerId = ? AND deletedAt IS NULL"
+  ).all(nodeId, userId) as { id: string }[];
   for (const child of children) {
     markDeletedRecursive(child.id, userId, now);
   }
@@ -721,10 +736,12 @@ async function handleMove(req: Request, user: UserRow, urlPath: string): Promise
 
 function updateUserUsedBytes(userId: string) {
   // Recompute by summing all non-deleted files of this user.
+  // SUM(sizeBytes) returns BigInt because the DB is opened with
+  // safeIntegers: true. COALESCE wraps it to 0 (also BigInt) when empty.
   const result = db.query(
     "SELECT COALESCE(SUM(sizeBytes), 0) AS total FROM FileNode WHERE ownerId = ? AND isDirectory = 0 AND deletedAt IS NULL"
-  ).get(userId) as { total: number } | null;
-  const total = result?.total ?? 0;
+  ).get(userId) as { total: bigint } | null;
+  const total = result?.total ?? 0n;
   db.query("UPDATE User SET usedBytes = ? WHERE id = ?").run(total, userId);
 }
 
@@ -792,8 +809,3 @@ const server = Bun.serve({
 
 console.log(`[webdav] Doma WebDAV server listening on http://localhost:${PORT}${DAV_PREFIX}/`);
 console.log(`[webdav] Auth: HTTP Basic (Doma username/password)`);
-
-// silence unused import
-void mimeLookup;
-void Readable;
-void PassThrough;

@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth/session";
 import { getStorage, buildStorageKey } from "@/lib/storage";
 import { sanitizeName, computeDirectorySize } from "@/lib/cloud/tree";
 import { guessMime } from "@/lib/cloud/mime";
+import { rateLimit, LIMITS } from "@/lib/auth/rate-limit";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -36,9 +37,16 @@ import path from "node:path";
  * Crash recovery: if the client crashes mid-upload, the temp file lingers.
  * A cleanup job (or the user re-uploading with the same X-Upload-Id) will
  * resume from the last successfully written chunk.
+ *
+ * Storage backend support:
+ *   - LocalFileStorage: chunks land in `<root>/.uploads/<user>/<uploadId>/`
+ *     and are concatenated on the final chunk into the permanent storage key
+ *     via streaming pipe through sha256.
+ *   - S3FileStorage: chunks land in `<bucket>/.uploads/<user>/<uploadId>/`
+ *     and the final file is assembled by sequentially streaming each chunk
+ *     through `storage.put()`'s hashing pipe.
  */
 
-const CHUNK_DIR_SUFFIX = ".chunks";
 const MAX_CHUNK_SIZE = 64 * 1024 * 1024; // 64 MB hard cap per chunk
 
 interface ChunkMeta {
@@ -75,6 +83,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Не авторизован" }, { status: 401 });
   }
 
+  // Rate limit — 100 chunk uploads/min per user (same bucket as /upload).
+  const rl = rateLimit(`upload:${session.sub}`, LIMITS.upload.limit, LIMITS.upload.windowMs);
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: "Слишком много загрузок. Попробуйте через минуту." },
+      {
+        status: 429,
+        headers: { "Retry-After": String(Math.ceil((rl.resetAt - Date.now()) / 1000)) },
+      }
+    );
+  }
+
   const meta = parseMeta(req);
   if (!meta) {
     return NextResponse.json({ error: "Неверные заголовки чанка" }, { status: 400 });
@@ -91,8 +111,6 @@ export async function POST(req: NextRequest) {
   const url = new URL(req.url);
   const parentId = url.searchParams.get("parentId") || null;
 
-  const storageRoot = process.env.STORAGE_LOCAL_ROOT ?? path.join(process.cwd(), "storage-data");
-
   // #2 — CRITICAL: validate parentId on EVERY chunk, not just chunk 0.
   // The original code only checked on chunkIndex === 0, so an attacker could
   // send chunk 0 to root (no parentId) and then chunk 1+ with ?parentId=<target>
@@ -102,9 +120,7 @@ export async function POST(req: NextRequest) {
   // On subsequent chunks, IGNORE the ?parentId query param and use the
   // persisted value. This makes the upload session immutable.
   const sessionFile = path.join(
-    storageRoot,
-    ".uploads",
-    session.sub,
+    uploadTempRoot(session.sub),
     meta.uploadId,
     "session.json"
   );
@@ -157,37 +173,24 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Resolve temp chunk directory.
+  // Write this chunk to its own temp storage key: .uploads/<user>/<uploadId>/chunk-<index>
+  // We use the storage abstraction so both Local and S3 backends work.
   const storage = getStorage();
-  const isLocal = process.env.STORAGE_DRIVER !== "s3";
-  const tempDir = path.join(storageRoot, ".uploads", session.sub, meta.uploadId);
-
-  if (isLocal) {
-    await fs.mkdir(tempDir, { recursive: true });
-  }
-
-  // Write this chunk to its own file: <tempDir>/chunk-<index>
-  const chunkPath = path.join(tempDir, `chunk-${meta.chunkIndex}`);
+  const chunkKey = `${UPLOAD_TEMP_PREFIX}/${session.sub}/${meta.uploadId}/chunk-${meta.chunkIndex}`;
   const chunkStream = req.body;
 
   if (chunkStream) {
-    // Stream the request body directly to the chunk file.
-    const nodeStream = await import("node:stream").then((m) => m.Readable.fromWeb(chunkStream as unknown as import("node:stream/web").ReadableStream<Uint8Array>));
-    const sink = await fs.open(chunkPath, "w");
-    const writeStream = sink.createWriteStream();
     try {
-      await new Promise<void>((resolve, reject) => {
-        nodeStream.pipe(writeStream);
-        nodeStream.on("error", reject);
-        writeStream.on("error", reject);
-        writeStream.on("finish", resolve);
-      });
-      await sink.close();
+      await storage.put(
+        chunkKey,
+        chunkStream as unknown as import("node:stream/web").ReadableStream<Uint8Array>
+      );
     } catch (err) {
-      writeStream.destroy();
-      await sink.close().catch(() => undefined);
-      await fs.unlink(chunkPath).catch(() => undefined);
-      throw err;
+      const msg = err instanceof Error ? err.message : "Ошибка записи чанка";
+      return NextResponse.json(
+        { error: `Не удалось сохранить чанк: ${msg}` },
+        { status: 500 }
+      );
     }
   }
 
@@ -212,61 +215,78 @@ export async function POST(req: NextRequest) {
   const storageKey = buildStorageKey(user.id, fileId, safeName);
   const mimeType = meta.fileMime || guessMime(safeName);
 
-  // Concatenate all chunks into the final storage key — STREAMING, not
-  // buffered. We pipe each chunk file through the hash + final write stream
-  // one at a time, so memory stays flat regardless of total file size.
+  // Concatenate all chunks into the final storage key — STREAMING through the
+  // storage abstraction so S3 and local FS both work.
+  //
+  // We build a single composite Readable that sequentially emits each chunk's
+  // bytes (pulled via storage.get()), and feed it to storage.put() which
+  // hashes + counts bytes on the fly. Memory stays flat regardless of total
+  // file size.
   const { createHash } = await import("node:crypto");
-  const { createReadStream } = await import("node:fs");
+  const { Readable } = await import("node:stream");
   const hash = createHash("sha256");
   let totalSize = 0;
 
-  const finalPath = path.join(storageRoot, storageKey);
-  await fs.mkdir(path.dirname(finalPath), { recursive: true });
-  const finalSink = await fs.open(finalPath, "w");
-  const finalWrite = finalSink.createWriteStream();
+  const compositeStream = new Readable({
+    async read() {
+      // No-op; data is pushed from the async loop below.
+    },
+  });
 
-  try {
-    for (let i = 0; i < meta.chunkTotal; i++) {
-      const cp = path.join(tempDir, `chunk-${i}`);
-      // Stream this chunk through hash + finalWrite — never loads the whole
-      // chunk into memory at once (Node streams it in 64KB high-water marks).
-      await new Promise<void>((resolve, reject) => {
-        const chunkStream = createReadStream(cp);
-        chunkStream.on("data", (chunk: Buffer) => {
-          hash.update(chunk);
-          totalSize += chunk.length;
-          // Write to finalWrite; backpressure is handled by pipe.
-          if (!finalWrite.write(chunk)) {
-            chunkStream.pause();
-            finalWrite.once("drain", () => chunkStream.resume());
+  // Drive the composite stream: pull each chunk in order, push its bytes.
+  (async () => {
+    try {
+      for (let i = 0; i < meta.chunkTotal; i++) {
+        const ck = `${UPLOAD_TEMP_PREFIX}/${session.sub}/${meta.uploadId}/chunk-${i}`;
+        const chunkReadable = await storage.get(ck);
+        for await (const buf of chunkReadable) {
+          const b = buf as Buffer;
+          hash.update(b);
+          totalSize += b.length;
+          if (!compositeStream.push(b)) {
+            // Backpressure: wait for drain.
+            await new Promise<void>((resolve) => compositeStream.once("drain", resolve));
           }
-        });
-        chunkStream.on("error", reject);
-        chunkStream.on("end", resolve);
-      });
-      // Delete the chunk to free space as we go.
-      await fs.unlink(cp).catch(() => undefined);
+        }
+        // Delete the chunk to free space as we go.
+        await storage.delete(ck).catch(() => undefined);
+      }
+      compositeStream.push(null); // end of stream
+    } catch (err) {
+      compositeStream.destroy(err instanceof Error ? err : new Error(String(err)));
     }
-    await new Promise<void>((resolve, reject) => {
-      finalWrite.end(() => resolve());
-      finalWrite.on("error", reject);
-    });
-    await finalSink.close();
+  })().catch((err) => {
+    compositeStream.destroy(err instanceof Error ? err : new Error(String(err)));
+  });
+
+  // Stream the composite into the final storage key. storage.put() handles
+  // hashing internally, but we recompute hash+size here because storage.put()
+  // returns its own hash of what it received — and we want to verify the
+  // declared size matches. We discard the put()'s hash and use ours.
+  let putResult: { storageKey: string; sizeBytes: number; hashSha256?: string } | null = null;
+  try {
+    putResult = await storage.put(storageKey, compositeStream);
   } catch (err) {
-    finalWrite.destroy();
-    await finalSink.close().catch(() => undefined);
-    await fs.unlink(finalPath).catch(() => undefined);
-    // Clean up any remaining chunks.
-    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
-    throw err;
+    // Clean up any partial final object + remaining chunks.
+    await storage.delete(storageKey).catch(() => undefined);
+    for (let i = 0; i < meta.chunkTotal; i++) {
+      const ck = `${UPLOAD_TEMP_PREFIX}/${session.sub}/${meta.uploadId}/chunk-${i}`;
+      await storage.delete(ck).catch(() => undefined);
+    }
+    const msg = err instanceof Error ? err.message : "Ошибка сборки файла";
+    return NextResponse.json(
+      { error: `Не удалось собрать файл: ${msg}` },
+      { status: 500 }
+    );
   }
 
-  // Clean up the temp directory.
-  await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+  // Clean up the temp directory marker (session.json) — for local FS this is
+  // under <root>/.uploads/<user>/<uploadId>/; we remove it best-effort.
+  await fs.rm(path.dirname(sessionFile), { recursive: true, force: true }).catch(() => undefined);
 
   // Verify the assembled file matches the declared size.
   if (totalSize !== meta.fileSize) {
-    await fs.unlink(finalPath).catch(() => undefined);
+    await storage.delete(storageKey).catch(() => undefined);
     return NextResponse.json(
       { error: `Размер файла не совпадает: ожидалось ${meta.fileSize}, получили ${totalSize}` },
       { status: 422 }
@@ -275,6 +295,9 @@ export async function POST(req: NextRequest) {
 
   // Create the DB record.
   // Use effectiveParentId (from the persisted session), NOT the raw query param.
+  // Prefer the storage backend's hash if it computed one (it had to anyway);
+  // fall back to our own hash if the backend didn't return one.
+  const finalHash = putResult?.hashSha256 ?? hash.digest("hex");
   const node = await db.fileNode.create({
     data: {
       id: fileId,
@@ -285,7 +308,7 @@ export async function POST(req: NextRequest) {
       isDirectory: false,
       sizeBytes: BigInt(totalSize),
       mimeType,
-      hashSha256: hash.digest("hex"),
+      hashSha256: finalHash,
     },
   });
 
@@ -322,9 +345,25 @@ export async function DELETE(req: NextRequest) {
   if (!uploadId) {
     return NextResponse.json({ error: "Нужен uploadId" }, { status: 400 });
   }
-  const storageRoot = process.env.STORAGE_LOCAL_ROOT ?? path.join(process.cwd(), "storage-data");
-  const tempDir = path.join(storageRoot, ".uploads", session.sub, uploadId);
-  await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+  // Best-effort cleanup of any chunks we already received for this upload.
+  // We don't know chunkTotal here, so we probe chunk indices until we hit a
+  // missing one (storage.get throws) — at most MAX_CHUNK_PROBE attempts.
+  const storage = getStorage();
+  for (let i = 0; i < MAX_CHUNK_PROBE; i++) {
+    const ck = `${UPLOAD_TEMP_PREFIX}/${session.sub}/${uploadId}/chunk-${i}`;
+    try {
+      await storage.delete(ck);
+    } catch {
+      break;
+    }
+  }
+  // Also remove the local session.json marker if present.
+  const sessionFile = path.join(
+    uploadTempRoot(session.sub),
+    uploadId,
+    "session.json"
+  );
+  await fs.rm(path.dirname(sessionFile), { recursive: true, force: true }).catch(() => undefined);
   return NextResponse.json({ ok: true });
 }
 
@@ -347,3 +386,24 @@ function safeDecodeURIComponent(input: string): string {
   }
   return result;
 }
+
+/**
+ * Prefix for all temporary chunk storage keys. Stored under the same root
+ * as user files but in a hidden `.uploads/` namespace that the file browser
+ * never lists.
+ */
+const UPLOAD_TEMP_PREFIX = ".uploads";
+
+/**
+ * Local-filesystem path of the upload-session directory for a given user.
+ * Used only for the session.json marker file (which persists parentId +
+ * fileName across chunks). The chunk bytes themselves are stored via the
+ * storage abstraction, not on the local FS directly.
+ */
+function uploadTempRoot(userId: string): string {
+  const root = process.env.STORAGE_LOCAL_ROOT ?? path.join(process.cwd(), "storage-data");
+  return path.join(root, ".uploads", userId);
+}
+
+/** Max chunks we'll probe when aborting an upload (safety cap). */
+const MAX_CHUNK_PROBE = 100_000;

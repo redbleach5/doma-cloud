@@ -10,13 +10,13 @@ import { db } from "@/lib/db";
 export const DEFAULTS = {
   /** Default quota for newly registered (non-admin) users, in bytes. */
   defaultQuotaBytes: 50n * 1024n * 1024n * 1024n, // 50 GB
+  /** Quota for the first user (admin) and for newly-created admins, in bytes. */
+  adminQuotaBytes: 3n * 1024n * 1024n * 1024n * 1024n, // 3 TB
   /** Whether new user registration is open to anyone with the URL. */
   registrationOpen: true as boolean,
   /** Trash auto-purge age in days. 0 = never auto-purge. */
   trashRetentionDays: 30 as number,
-  /** Maximum upload size per single chunk, in bytes (chunked upload limit). */
-  maxChunkSizeBytes: 64n * 1024n * 1024n, // 64 MB
-};
+} as const;
 
 export type SettingKey = keyof typeof DEFAULTS;
 
@@ -37,15 +37,15 @@ export async function getAllSettings() {
     defaultQuotaBytes: map.has("defaultQuotaBytes")
       ? BigInt(map.get("defaultQuotaBytes")!)
       : DEFAULTS.defaultQuotaBytes,
+    adminQuotaBytes: map.has("adminQuotaBytes")
+      ? BigInt(map.get("adminQuotaBytes")!)
+      : DEFAULTS.adminQuotaBytes,
     registrationOpen: map.has("registrationOpen")
       ? map.get("registrationOpen") === "true"
       : DEFAULTS.registrationOpen,
     trashRetentionDays: map.has("trashRetentionDays")
       ? parseInt(map.get("trashRetentionDays")!, 10)
       : DEFAULTS.trashRetentionDays,
-    maxChunkSizeBytes: map.has("maxChunkSizeBytes")
-      ? BigInt(map.get("maxChunkSizeBytes")!)
-      : DEFAULTS.maxChunkSizeBytes,
   };
 }
 
