@@ -38,6 +38,7 @@
   ],
   "exclude": [
     "node_modules",
-    "mini-services/webdav"
+    "mini-services/webdav",
+    "tests"
   ]
 }

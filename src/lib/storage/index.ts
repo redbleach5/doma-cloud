@@ -153,6 +153,15 @@ export function getStorage(): StorageBackend {
   return cached;
 }
 
+/**
+ * Reset the cached storage backend. Primarily for tests that need to
+ * point STORAGE_LOCAL_ROOT at a fresh temp directory between scenarios.
+ * Safe to call at runtime — the next `getStorage()` re-creates the backend.
+ */
+export function resetStorageCache(): void {
+  cached = null;
+}
+
 /** Build a content-addressed storage key. Format: <ownerId>/<fileId>/<safeName> */
 export function buildStorageKey(ownerId: string, fileId: string, name: string): string {
   const safe = name.replace(/[\\/:*?"<>|]/g, "_").slice(0, 180);

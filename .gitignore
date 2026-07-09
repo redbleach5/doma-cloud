@@ -45,3 +45,10 @@ tsconfig.tsbuildinfo
 
 # Testing
 coverage/
+
+# Test artifacts
+prisma/test.db
+prisma/test.db-shm
+prisma/test.db-wal
+storage-data-test/
+tsconfig.test.tsbuildinfo

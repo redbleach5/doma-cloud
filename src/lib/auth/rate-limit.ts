@@ -81,3 +81,13 @@ export const LIMITS = {
   upload: { limit: 100, windowMs: 60_000 },         // 100 uploads/min per user
   download: { limit: 200, windowMs: 60_000 },       // 200 downloads/min per IP (incl. Range)
 } as const;
+
+/**
+ * TEST-ONLY: clear all rate-limit buckets. Used by test setup to ensure
+ * tests don't interfere with each other via shared in-memory state.
+ * Not intended for production use.
+ */
+export function __clearRateLimitBucketsForTests(): void {
+  buckets.clear();
+  lastPurge = Date.now();
+}
