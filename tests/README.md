@@ -103,40 +103,12 @@ it("logs in successfully", async () => {
 });
 ```
 
-## Findings (Bugs / Quirks Documented by Tests)
+## Design Notes
 
-The tests document several real behaviors (some are bugs) in the existing code:
-
-1. **`.ts` files categorized as "video"** (`mime.test.ts`): The `mime-types`
-   library returns `video/mp2t` for `.ts` (MPEG Transport Stream), and the
-   mime-prefix check in `categorize()` runs before `CODE_EXT`. TypeScript
-   files are therefore misclassified.
-
-2. **Case-insensitive username duplicate check is broken** (`auth.test.ts`):
-   The register route tries `findFirst({ where: { username: { equals: username.toLowerCase() } } })`,
-   but SQLite's default comparison is case-sensitive, so registering "alice"
-   when "Alice" exists succeeds (should be a 409).
-
-3. **`sanitizeName` order-of-operations** (`tree-pure.test.ts`): Leading dots
-   are stripped BEFORE whitespace is trimmed, so `"  ..foo"` → `"..foo"`
-   (dots survive because they're not at position 0 when the strip runs).
-
-4. **`sanitizeName` on all-forbidden input**: `sanitizeName("\\")` returns
-   `"_"` (not `"untitled"`), because the backslash is replaced with `_`
-   before the empty-fallback check.
-
-5. **Session role refresh**: `getSession()` returns the role from the DB (not
-   the JWT), so role changes take effect immediately. Token-version checking
-   still invalidates old sessions after password changes.
-
-6. **FileIcon colors are overridden by text-muted-foreground** (`file-icon.test.tsx`):
-   The `iconFor()` helper in `src/components/cloud/file-icon.tsx` defines a
-   local `const className = "text-muted-foreground"` and passes it as the
-   second argument to `cn(categoryColor, className)`. Because `twMerge`
-   keeps the LAST conflicting class, the muted-foreground ALWAYS wins over
-   the per-category color. All non-folder icons appear in muted gray instead
-   of their intended category color. Fix: pass the muted-foreground class
-   only for the fallback case, or restructure the cn() call.
+1. **Session role refresh** (`session.test.ts`): `getSession()` returns the role
+   from the DB (not the JWT), so role changes take effect immediately.
+   Token-version checking still invalidates old sessions after password changes.
+   This is intentional — not a bug.
 
 ## Adding New Tests
 

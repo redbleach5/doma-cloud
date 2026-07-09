@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { hashPassword } from "@/lib/auth/session";
 import { getSetting } from "@/lib/cloud/settings";
+import { isUsernameTaken } from "@/lib/auth/users";
 import { z } from "zod";
 
 export async function GET() {
@@ -67,11 +68,7 @@ export async function POST(req: NextRequest) {
 
   const { username, displayName, password, role, quotaBytes } = parsed.data;
 
-  // Uniqueness (case-insensitive check)
-  const existing =
-    (await db.user.findUnique({ where: { username } })) ??
-    (await db.user.findFirst({ where: { username: username.toLowerCase() } }));
-  if (existing) {
+  if (await isUsernameTaken(username)) {
     return NextResponse.json({ error: "Имя пользователя уже занято" }, { status: 409 });
   }
 

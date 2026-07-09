@@ -66,20 +66,12 @@ describe("sanitizeName", () => {
     expect(sanitizeName("")).toBe("untitled");
     expect(sanitizeName("   ")).toBe("untitled");
     expect(sanitizeName("...")).toBe("untitled");
-    // NOTE: a single forbidden char like "\\" becomes "_" (not empty),
-    // so it does NOT fall through to the 'untitled' default. This is
-    // the current behavior — documented here as a regression guard.
-    expect(sanitizeName("\\")).toBe("_");
+    expect(sanitizeName("\\")).toBe("untitled");
   });
 
-  it("combines multiple sanitization rules (documenting actual order of operations)", () => {
-    // Order in the impl: (1) replace forbidden chars, (2) strip LEADING dots,
-    // (3) trim whitespace, (4) truncate.
-    // Because leading-dot-strip runs BEFORE trim, leading whitespace followed
-    // by dots does NOT get its dots stripped (they're not at position 0 yet).
-    // Forbidden chars / : ? are replaced with _ in step 1.
-    expect(sanitizeName("  ..a/b:c?  ")).toBe("..a_b_c_");
-    // But dots that ARE at position 0 (no leading whitespace) get stripped:
+  it("combines multiple sanitization rules", () => {
+    // Order: replace forbidden chars → trim → strip leading dots → truncate.
+    expect(sanitizeName("  ..a/b:c?  ")).toBe("a_b_c_");
     expect(sanitizeName("..a/b:c?")).toBe("a_b_c_");
   });
 });

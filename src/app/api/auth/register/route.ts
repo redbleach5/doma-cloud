@@ -6,6 +6,7 @@ import {
   setSessionCookie,
 } from "@/lib/auth/session";
 import { rateLimit, getClientIp, LIMITS } from "@/lib/auth/rate-limit";
+import { isUsernameTaken } from "@/lib/auth/users";
 import { z } from "zod";
 
 const BodySchema = z.object({
@@ -63,15 +64,8 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Username uniqueness (case-insensitive — SQLite doesn't support `mode`
-  // so we do a lowercased lookup).
-  const existing = await db.user.findFirst({
-    where: { username: { equals: username.toLowerCase() } },
-  });
-  // Also check the case-sensitive variant — SQLite default is case-sensitive
-  // on `=` so we need both checks.
-  const existingExact = await db.user.findUnique({ where: { username } });
-  if (existing || existingExact) {
+  // Username uniqueness (case-insensitive — SQLite default comparison is case-sensitive).
+  if (await isUsernameTaken(username)) {
     return NextResponse.json(
       { error: "Имя пользователя уже занято" },
       { status: 409 }

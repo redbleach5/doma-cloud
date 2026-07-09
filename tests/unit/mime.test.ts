@@ -86,11 +86,7 @@ describe("categorize", () => {
     expect(categorize("Dockerfile")).toBe("code");
     expect(categorize("app.vue")).toBe("code");
     expect(categorize("app.svelte")).toBe("code");
-    // NOTE: .ts is detected as "video" because mime-types returns video/mp2t
-    // (MPEG-2 Transport Stream) for .ts — and the mime-prefix check runs
-    // BEFORE the CODE_EXT check. This is a known quirk; documented here as
-    // a regression guard.
-    expect(categorize("app.ts")).toBe("video");
+    expect(categorize("app.ts")).toBe("code");
   });
 
   it("categorizes office documents", () => {

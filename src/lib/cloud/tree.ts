@@ -176,11 +176,14 @@ export async function ensureDirectory(
 
 /** Sanitize a filename for safe display. */
 export function sanitizeName(name: string): string {
-  return name
+  const cleaned = name
     .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_")
-    .replace(/^\.+/, "")
     .trim()
-    .slice(0, 240) || "untitled";
+    .replace(/^\.+/, "")
+    .slice(0, 240);
+  // Empty or only underscores (input was all forbidden chars) → untitled.
+  if (!cleaned || /^_+$/.test(cleaned)) return "untitled";
+  return cleaned;
 }
 
 export { guessMime, categorize };

@@ -113,18 +113,13 @@ describe("POST /api/auth/register", () => {
     expect(data).toMatchObject({ error: expect.any(String) });
   });
 
-  it("does NOT currently reject cross-case duplicates (SQLite case-sensitivity quirk)", async () => {
-    // NOTE: The register route tries to check duplicates case-insensitively
-    // via `findFirst({ where: { username: { equals: username.toLowerCase() } } })`,
-    // but SQLite's default string comparison is case-sensitive, so this
-    // lookup does NOT match "Alice" when searching for "alice". This test
-    // documents the current (buggy) behavior as a regression guard.
+  it("rejects cross-case duplicate usernames", async () => {
     await seedUser({ username: "Alice", password: "password123" });
     const { response } = await callRoute(register, {
       method: "POST",
       body: { username: "alice", password: "password123" },
     });
-    expect(response.status).toBe(200); // BUG: should be 409
+    expect(response.status).toBe(409);
   });
 
   it("respects the registrationOpen=false setting (after first user)", async () => {

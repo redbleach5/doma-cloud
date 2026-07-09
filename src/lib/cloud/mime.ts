@@ -43,14 +43,17 @@ export function categorize(filename: string, mimeType?: string): FileCategory {
   const ext = lower.split(".").pop() ?? "";
   const mime = (mimeType ?? guessMime(filename)).toLowerCase();
 
-  if (mime.startsWith("image/")) return "image";
-  if (mime.startsWith("video/")) return "video";
-  if (mime.startsWith("audio/")) return "audio";
-  if (mime === "application/pdf" || ext === "pdf") return "pdf";
+  // Extension-based buckets before mime-prefix checks — mime-types maps .ts
+  // to video/mp2t (MPEG Transport Stream), which would misclassify TypeScript.
   if (ext === "md" || ext === "markdown") return "markdown";
   if (CODE_EXT.has(ext)) return "code";
   if (OFFICE_EXT.has(ext)) return "office";
   if (ARCHIVE_EXT.has(ext)) return "archive";
+
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("video/")) return "video";
+  if (mime.startsWith("audio/")) return "audio";
+  if (mime === "application/pdf" || ext === "pdf") return "pdf";
   if (
     mime.startsWith("text/") ||
     [

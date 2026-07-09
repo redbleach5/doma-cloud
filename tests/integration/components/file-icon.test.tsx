@@ -49,88 +49,73 @@ describe("FileIcon component", () => {
     expect(svg?.getAttribute("class")).toContain("text-amber-500");
   });
 
-  // NOTE: The following tests document a BUG in file-icon.tsx.
-  //
-  // The `iconFor()` helper defines a local `const className = "text-muted-foreground"`
-  // and passes it as the SECOND argument to `cn(categoryColor, className)`. Because
-  // `twMerge` resolves tailwind conflicts by keeping the LAST class, the
-  // muted-foreground ALWAYS wins over the per-category color.
-  //
-  // Result: every non-folder icon appears in muted gray instead of its
-  // intended category color. The category-specific classes are still in the
-  // source string (twMerge drops them), but the visible color is muted.
-  //
-  // These tests pin the current (buggy) behavior so a future fix can flip
-  // them to the expected colors.
-
-  describe("BUG: per-category colors are overridden by text-muted-foreground", () => {
-    it("image icons appear muted (should be text-emerald-500)", () => {
+  describe("per-category icon colors", () => {
+    it("image icons use text-emerald-500", () => {
       const { container } = render(
         <FileIcon item={makeItem({ name: "photo.jpg", category: "image", mimeType: "image/jpeg" })} />
       );
       const svg = container.querySelector("svg");
-      // BUG: text-muted-foreground wins over text-emerald-500
-      expect(svg?.getAttribute("class")).toContain("text-muted-foreground");
-      expect(svg?.getAttribute("class")).not.toContain("text-emerald-500");
+      expect(svg?.getAttribute("class")).toContain("text-emerald-500");
+      expect(svg?.getAttribute("class")).not.toContain("text-muted-foreground");
     });
 
-    it("video icons appear muted (should be text-rose-500)", () => {
+    it("video icons use text-rose-500", () => {
       const { container } = render(
         <FileIcon item={makeItem({ name: "movie.mp4", category: "video", mimeType: "video/mp4" })} />
       );
       const svg = container.querySelector("svg");
-      expect(svg?.getAttribute("class")).toContain("text-muted-foreground");
+      expect(svg?.getAttribute("class")).toContain("text-rose-500");
     });
 
-    it("audio icons appear muted (should be text-purple-500)", () => {
+    it("audio icons use text-purple-500", () => {
       const { container } = render(
         <FileIcon item={makeItem({ name: "song.mp3", category: "audio", mimeType: "audio/mpeg" })} />
       );
       const svg = container.querySelector("svg");
-      expect(svg?.getAttribute("class")).toContain("text-muted-foreground");
+      expect(svg?.getAttribute("class")).toContain("text-purple-500");
     });
 
-    it("pdf icons appear muted (should be text-red-500)", () => {
+    it("pdf icons use text-red-500", () => {
       const { container } = render(
         <FileIcon item={makeItem({ name: "doc.pdf", category: "pdf", mimeType: "application/pdf" })} />
       );
       const svg = container.querySelector("svg");
-      expect(svg?.getAttribute("class")).toContain("text-muted-foreground");
+      expect(svg?.getAttribute("class")).toContain("text-red-500");
     });
 
-    it("code icons appear muted (should be text-sky-500)", () => {
+    it("code icons use text-sky-500", () => {
       const { container } = render(
         <FileIcon item={makeItem({ name: "app.js", category: "code", mimeType: "text/javascript" })} />
       );
       const svg = container.querySelector("svg");
-      expect(svg?.getAttribute("class")).toContain("text-muted-foreground");
+      expect(svg?.getAttribute("class")).toContain("text-sky-500");
     });
 
-    it("text icons appear muted (should be text-blue-500)", () => {
+    it("text icons use text-blue-500", () => {
       const { container } = render(
         <FileIcon item={makeItem({ name: "notes.txt", category: "text" })} />
       );
       const svg = container.querySelector("svg");
-      expect(svg?.getAttribute("class")).toContain("text-muted-foreground");
+      expect(svg?.getAttribute("class")).toContain("text-blue-500");
     });
 
-    it("office icons appear muted (should be text-amber-600)", () => {
+    it("office icons use text-amber-600", () => {
       const { container } = render(
         <FileIcon item={makeItem({ name: "doc.docx", category: "office" })} />
       );
       const svg = container.querySelector("svg");
-      expect(svg?.getAttribute("class")).toContain("text-muted-foreground");
+      expect(svg?.getAttribute("class")).toContain("text-amber-600");
     });
 
-    it("archive icons appear muted (should be text-yellow-700)", () => {
+    it("archive icons use text-yellow-700", () => {
       const { container } = render(
         <FileIcon item={makeItem({ name: "file.zip", category: "archive" })} />
       );
       const svg = container.querySelector("svg");
-      expect(svg?.getAttribute("class")).toContain("text-muted-foreground");
+      expect(svg?.getAttribute("class")).toContain("text-yellow-700");
     });
 
-    it("'other' icons correctly use muted-foreground (intended)", () => {
+    it("'other' icons use muted-foreground", () => {
       const { container } = render(
         <FileIcon item={makeItem({ name: "file.bin", category: "other" })} />
       );
@@ -138,12 +123,12 @@ describe("FileIcon component", () => {
       expect(svg?.getAttribute("class")).toContain("text-muted-foreground");
     });
 
-    it("markdown icons appear muted (should be text-orange-500)", () => {
+    it("markdown icons use text-orange-500", () => {
       const { container } = render(
         <FileIcon item={makeItem({ name: "README.md", category: "markdown" })} />
       );
       const svg = container.querySelector("svg");
-      expect(svg?.getAttribute("class")).toContain("text-muted-foreground");
+      expect(svg?.getAttribute("class")).toContain("text-orange-500");
     });
   });
 

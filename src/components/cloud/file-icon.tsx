@@ -13,14 +13,20 @@ interface Props {
 }
 
 export function FileIcon({ item, className }: Props) {
-  if (item.isDirectory) return <Folder className={cn("text-amber-500", className)} fill="currentColor" fillOpacity={0.15} />;
+  if (item.isDirectory) {
+    return (
+      <Folder
+        className={cn("text-amber-500", className)}
+        fill="currentColor"
+        fillOpacity={0.15}
+      />
+    );
+  }
 
-  const icon = iconFor(item);
-  return icon;
+  return iconFor(item, className);
 }
 
-function iconFor(item: FileItem) {
-  const className = "text-muted-foreground";
+function iconFor(item: FileItem, className?: string) {
   switch (item.category) {
     case "image":
       return <FileImage className={cn("text-emerald-500", className)} />;
@@ -41,6 +47,6 @@ function iconFor(item: FileItem) {
     case "text":
       return <FileText className={cn("text-blue-500", className)} />;
     default:
-      return <FileIconGeneric className={className} />;
+      return <FileIconGeneric className={cn("text-muted-foreground", className)} />;
   }
 }

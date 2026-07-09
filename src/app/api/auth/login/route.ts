@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { signSession, setSessionCookie, verifyPassword } from "@/lib/auth/session";
 import { rateLimit, getClientIp, LIMITS } from "@/lib/auth/rate-limit";
+import { findUserByUsername } from "@/lib/auth/users";
 import { z } from "zod";
 
 const BodySchema = z.object({
@@ -46,10 +47,7 @@ export async function POST(req: NextRequest) {
 
   const { username, password } = parsed.data;
 
-  // SQLite doesn't support `mode: insensitive` — try exact then lowercase.
-  const user =
-    (await db.user.findUnique({ where: { username } })) ??
-    (await db.user.findFirst({ where: { username: username.toLowerCase() } }));
+  const user = await findUserByUsername(username);
   if (!user) {
     // Constant-time-ish: still run argon2 to avoid user enumeration by timing.
     await verifyPassword(password, DUMMY_ARGON2_HASH);
