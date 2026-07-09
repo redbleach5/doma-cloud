@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getSession } from "@/lib/auth/session";
-import { computeDirectorySize } from "@/lib/cloud/tree";
 
 export async function GET() {
   const session = await getSession();
@@ -14,9 +13,10 @@ export async function GET() {
     return NextResponse.json({ user: null });
   }
 
-  // Recompute used space — accurate but cheap enough on a family scale.
-  const usedBytes = await computeDirectorySize(user.id, null);
-
+  // Read the cached `usedBytes` column — maintained incrementally by the
+  // upload/delete/restore routes. Avoids an O(N) tree traversal on every
+  // /api/me call (which fires on every page navigation and tab focus).
+  // If you suspect drift, hit POST /api/admin/recompute-quotas to recompute.
   return NextResponse.json({
     user: {
       id: user.id,
@@ -24,7 +24,7 @@ export async function GET() {
       displayName: user.displayName,
       role: user.role,
       quotaBytes: user.quotaBytes.toString(),
-      usedBytes: usedBytes.toString(),
+      usedBytes: user.usedBytes.toString(),
       createdAt: user.createdAt,
     },
   });

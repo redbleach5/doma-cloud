@@ -35,7 +35,14 @@ export async function listChildren(
   });
 }
 
-/** Recursively compute total size of a directory. */
+/**
+ * Recursively compute total size of a directory's non-deleted children.
+ *
+ * Used as a fallback for `user.usedBytes` recomputation and for subtree
+ * size queries. For per-user totals prefer `recomputeUserUsedBytes` (one
+ * SQL aggregate) or just read `user.usedBytes` directly (already maintained
+ * incrementally by the upload/delete/restore routes).
+ */
 export async function computeDirectorySize(
   ownerId: string,
   parentId: string | null
@@ -52,6 +59,58 @@ export async function computeDirectorySize(
       total += child.sizeBytes;
     }
   }
+  return total;
+}
+
+/**
+ * Compute the total size of a subtree (sum of sizeBytes of every FILE node
+ * at or below `nodeId`, regardless of deletedAt state). Used to decrement
+ * `user.usedBytes` when a subtree is soft-deleted — much cheaper than
+ * `computeDirectorySize(ownerId, null)` which traverses the whole tree.
+ */
+export async function computeSubtreeSize(
+  ownerId: string,
+  nodeId: string
+): Promise<bigint> {
+  const node = await db.fileNode.findUnique({
+    where: { id: nodeId },
+    select: { isDirectory: true, sizeBytes: true, ownerId: true },
+  });
+  if (!node || node.ownerId !== ownerId) return 0n;
+  if (!node.isDirectory) return node.sizeBytes;
+  let total = 0n;
+  const children = await db.fileNode.findMany({
+    where: { parentId: nodeId },
+    select: { id: true, isDirectory: true, sizeBytes: true },
+  });
+  for (const child of children) {
+    if (child.isDirectory) {
+      total += await computeSubtreeSize(ownerId, child.id);
+    } else {
+      total += child.sizeBytes;
+    }
+  }
+  return total;
+}
+
+/**
+ * Recompute `user.usedBytes` from scratch with a single SQL aggregate query
+ * and persist it to the DB. Use this when an incremental update is hard to
+ * get right (e.g. partial restore of a subtree) or as a periodic sanity
+ * check from the admin panel.
+ *
+ * Returns the recomputed total.
+ */
+export async function recomputeUserUsedBytes(userId: string): Promise<bigint> {
+  const agg = await db.fileNode.aggregate({
+    where: { ownerId: userId, isDirectory: false, deletedAt: null },
+    _sum: { sizeBytes: true },
+  });
+  const total = agg._sum.sizeBytes ?? 0n;
+  await db.user.update({
+    where: { id: userId },
+    data: { usedBytes: total },
+  });
   return total;
 }
 

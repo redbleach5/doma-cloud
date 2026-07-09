@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import {
-  verifyPassword,
-  signSession,
-  setSessionCookie,
-} from "@/lib/auth/session";
+import { signSession, setSessionCookie, verifyPassword } from "@/lib/auth/session";
 import { rateLimit, getClientIp, LIMITS } from "@/lib/auth/rate-limit";
 import { z } from "zod";
 
@@ -12,6 +8,15 @@ const BodySchema = z.object({
   username: z.string().min(1).max(64),
   password: z.string().min(1).max(200),
 });
+
+// Pre-computed argon2id hash of a random string, used to keep login timing
+// roughly constant when the username doesn't exist. Without this, an
+// attacker could enumerate accounts by response time (existing users run
+// argon2, missing users return immediately). verifyPassword will always
+// return false for the real password, but the ~80ms of argon2 work
+// happens regardless.
+const DUMMY_ARGON2_HASH =
+  "$argon2id$v=19$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 export async function POST(req: NextRequest) {
   // Rate limit — 10 login attempts per minute per IP.
@@ -46,8 +51,8 @@ export async function POST(req: NextRequest) {
     (await db.user.findUnique({ where: { username } })) ??
     (await db.user.findFirst({ where: { username: username.toLowerCase() } }));
   if (!user) {
-    // Constant-time-ish: still run bcrypt to avoid user enumeration.
-    await verifyPassword(password, "$2a$10$CwTycUXWue0Thq9StjUM0uJ8.Emxc.S6.R2bHm6Yp3f9vYj5Nz9mq");
+    // Constant-time-ish: still run argon2 to avoid user enumeration by timing.
+    await verifyPassword(password, DUMMY_ARGON2_HASH);
     return NextResponse.json({ error: "Неверный логин или пароль" }, { status: 401 });
   }
 

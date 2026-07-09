@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getSession } from "@/lib/auth/session";
-import { computeDirectorySize } from "@/lib/cloud/tree";
 import { z } from "zod";
 
 export async function GET() {
@@ -15,8 +14,7 @@ export async function GET() {
     return NextResponse.json({ error: "Пользователь не найден" }, { status: 404 });
   }
 
-  const usedBytes = await computeDirectorySize(user.id, null);
-
+  // Read the cached `usedBytes` — maintained incrementally by upload/delete.
   return NextResponse.json({
     user: {
       id: user.id,
@@ -24,7 +22,7 @@ export async function GET() {
       displayName: user.displayName,
       role: user.role,
       quotaBytes: user.quotaBytes.toString(),
-      usedBytes: usedBytes.toString(),
+      usedBytes: user.usedBytes.toString(),
       birthday: user.birthday?.toISOString() ?? null,
       themePreference: user.themePreference,
       createdAt: user.createdAt.toISOString(),

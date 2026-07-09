@@ -319,6 +319,18 @@ export const api = {
     });
     return jsonOrThrow(res);
   },
+
+  /** Recompute user.usedBytes from scratch (admin maintenance operation). */
+  async adminRecomputeQuotas(): Promise<{
+    ok: boolean;
+    recomputed: number;
+    users: Array<{ id: string; username: string; before: string; after: string; drift: string }>;
+  }> {
+    const res = await fetch("/api/admin/recompute-quotas", {
+      method: "POST",
+    });
+    return jsonOrThrow(res);
+  },
 };
 
 export interface ProfileUser {

@@ -3,7 +3,6 @@ import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { hashPassword } from "@/lib/auth/session";
 import { getSetting } from "@/lib/cloud/settings";
-import { computeDirectorySize } from "@/lib/cloud/tree";
 import { z } from "zod";
 
 export async function GET() {
@@ -25,20 +24,18 @@ export async function GET() {
     },
   });
 
-  // Compute actual used space per user (usedBytes column is eventually-consistent).
-  const enriched = await Promise.all(
-    users.map(async (u) => {
-      const realUsed = await computeDirectorySize(u.id, null);
-      return {
-        ...u,
-        quotaBytes: u.quotaBytes.toString(),
-        usedBytes: realUsed.toString(),
-        birthday: u.birthday?.toISOString() ?? null,
-        createdAt: u.createdAt.toISOString(),
-        lastLoginAt: u.lastLoginAt?.toISOString() ?? null,
-      };
-    })
-  );
+  // Read the cached `usedBytes` for each user — maintained incrementally by
+  // the upload/delete/restore routes. Avoids an O(N×M) tree traversal per
+  // admin-users list call. If you suspect drift, hit POST
+  // /api/admin/recompute-quotas to recompute from scratch.
+  const enriched = users.map((u) => ({
+    ...u,
+    quotaBytes: u.quotaBytes.toString(),
+    usedBytes: u.usedBytes.toString(),
+    birthday: u.birthday?.toISOString() ?? null,
+    createdAt: u.createdAt.toISOString(),
+    lastLoginAt: u.lastLoginAt?.toISOString() ?? null,
+  }));
 
   return NextResponse.json({ users: enriched });
 }

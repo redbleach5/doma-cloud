@@ -10,9 +10,17 @@
  */
 
 import { SignJWT, jwtVerify } from "jose";
-import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
 import { db } from "@/lib/db";
+import {
+  hashPassword,
+  verifyPassword,
+} from "./password";
+
+// Re-export so existing callers (`import { hashPassword } from "@/lib/auth/session"`)
+// keep working — the actual implementation lives in ./password for sharing
+// with the WebDAV mini-service.
+export { hashPassword, verifyPassword };
 
 const COOKIE_NAME = "doma_session";
 const TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
@@ -54,14 +62,6 @@ export interface SessionPayload {
   username: string;
   role: "admin" | "user";
   ver: number;
-}
-
-export async function hashPassword(plain: string): Promise<string> {
-  return bcrypt.hash(plain, 10);
-}
-
-export async function verifyPassword(plain: string, hash: string): Promise<boolean> {
-  return bcrypt.compare(plain, hash);
 }
 
 export async function signSession(payload: SessionPayload): Promise<string> {

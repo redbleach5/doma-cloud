@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getSession } from "@/lib/auth/session";
 import { getStorage, buildStorageKey } from "@/lib/storage";
-import { sanitizeName, computeDirectorySize } from "@/lib/cloud/tree";
+import { sanitizeName } from "@/lib/cloud/tree";
 import { guessMime } from "@/lib/cloud/mime";
 import { rateLimit, LIMITS } from "@/lib/auth/rate-limit";
 import { randomUUID } from "node:crypto";
@@ -158,16 +158,16 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Quota check on the first chunk.
+  // Quota check on the first chunk — use the cached `usedBytes` column
+  // (O(1)) instead of a full tree traversal.
   if (meta.chunkIndex === 0) {
     const user = await db.user.findUnique({ where: { id: session.sub } });
     if (!user) {
       return NextResponse.json({ error: "Пользователь не найден" }, { status: 404 });
     }
-    const usedBytes = await computeDirectorySize(user.id, null);
-    if (BigInt(usedBytes) + BigInt(meta.fileSize) > user.quotaBytes) {
+    if (user.usedBytes + BigInt(meta.fileSize) > user.quotaBytes) {
       return NextResponse.json(
-        { error: "Превышен лимит места", detail: { quota: user.quotaBytes.toString(), used: usedBytes.toString(), incoming: meta.fileSize } },
+        { error: "Превышен лимит места", detail: { quota: user.quotaBytes.toString(), used: user.usedBytes.toString(), incoming: meta.fileSize } },
         { status: 413 }
       );
     }
@@ -312,9 +312,16 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  // Update user.usedBytes.
-  const newUsed = await computeDirectorySize(user.id, null);
-  await db.user.update({ where: { id: user.id }, data: { usedBytes: newUsed } });
+  // Update user.usedBytes incrementally — O(1) instead of O(N) tree walk.
+  // totalSize is the actual assembled file size (verified above to match
+  // meta.fileSize), so adding it to the cached counter is exactly correct.
+  await db.user.update({
+    where: { id: user.id },
+    data: { usedBytes: { increment: BigInt(totalSize) } },
+  });
+  // user.usedBytes is the pre-upload cached value; newUsed reflects the
+  // post-upload counter without an extra DB roundtrip.
+  const newUsed = user.usedBytes + BigInt(totalSize);
 
   return NextResponse.json({
     uploadId: meta.uploadId,

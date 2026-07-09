@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getSession } from "@/lib/auth/session";
 import { getStorage } from "@/lib/storage";
-import { purgeSubtree, computeDirectorySize } from "@/lib/cloud/tree";
+import { purgeSubtree, computeSubtreeSize, recomputeUserUsedBytes } from "@/lib/cloud/tree";
 
 /**
  * DELETE  — soft delete (move to trash). ?hard=1 to permanently delete.
@@ -41,24 +41,40 @@ export async function DELETE(
   if (hard) {
     const storage = getStorage();
     await purgeSubtree(session.sub, id, storage);
-  } else {
-    // Soft delete — mark this node AND all descendants with the SAME timestamp.
-    // This is critical for #12: when restoring, we only restore descendants
-    // that share this exact timestamp (i.e. were deleted as part of THIS
-    // folder deletion, not independently before it).
-    const deletedAt = new Date();
-    await db.fileNode.update({
-      where: { id },
-      data: { deletedAt, deletedBy: session.sub },
-    });
-    await markDescendantsDeleted(id, session.sub, deletedAt);
+    // Hard delete purges bytes that were already soft-deleted, so the
+    // `usedBytes` counter (which excludes soft-deleted files) doesn't
+    // change. But hard-deleting a NON-trashed node (e.g. via admin) would
+    // shift the counter — recompute from scratch to be safe.
+    const usedBytes = await recomputeUserUsedBytes(session.sub);
+    return NextResponse.json({ ok: true, usedBytes: usedBytes.toString() });
   }
 
-  const usedBytes = await computeDirectorySize(session.sub, null);
+  // Soft delete — mark this node AND all descendants with the SAME timestamp.
+  // This is critical for #12: when restoring, we only restore descendants
+  // that share this exact timestamp (i.e. were deleted as part of THIS
+  // folder deletion, not independently before it).
+  const deletedAt = new Date();
+  // Compute the size of the subtree being soft-deleted BEFORE the deletion
+  // so we can decrement the cached counter incrementally.
+  const subtreeSize = await computeSubtreeSize(session.sub, id);
+  await db.fileNode.update({
+    where: { id },
+    data: { deletedAt, deletedBy: session.sub },
+  });
+  await markDescendantsDeleted(id, session.sub, deletedAt);
+
+  // Decrement the cached counter by the subtree size. O(1) instead of
+  // O(N) full-tree traversal.
   await db.user.update({
     where: { id: session.sub },
-    data: { usedBytes },
+    data: { usedBytes: { decrement: subtreeSize } },
   });
+  // Refresh user row to get the new counter value (cheaper than re-querying).
+  const refreshed = await db.user.findUnique({
+    where: { id: session.sub },
+    select: { usedBytes: true },
+  });
+  const usedBytes = refreshed?.usedBytes ?? 0n;
 
   return NextResponse.json({ ok: true, usedBytes: usedBytes.toString() });
 }
@@ -129,11 +145,11 @@ export async function PATCH(
     await restoreSameTimestampDescendants(id, node.deletedAt!);
   }
 
-  const usedBytes = await computeDirectorySize(session.sub, null);
-  await db.user.update({
-    where: { id: session.sub },
-    data: { usedBytes },
-  });
+  // Restore semantics are subtle (partial subtree restoration based on
+  // matching deletedAt), so an incremental delta is hard to compute
+  // correctly. Use a single SQL aggregate as a fallback — still much
+  // cheaper than the old recursive computeDirectorySize(null).
+  const usedBytes = await recomputeUserUsedBytes(session.sub);
 
   return NextResponse.json({
     ok: true,

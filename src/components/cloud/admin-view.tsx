@@ -680,6 +680,7 @@ function SystemSettingsTab() {
   }
 
   return (
+    <>
     <Card className="border-border/40">
       <CardHeader>
         <div className="flex items-center gap-2">
@@ -754,6 +755,90 @@ function SystemSettingsTab() {
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
           Сохранить настройки
         </Button>
+      </CardContent>
+    </Card>
+
+    <QuotaMaintenanceCard />
+    </>
+  );
+}
+
+/**
+ * Maintenance card — lets the admin trigger a full recompute of
+ * `user.usedBytes` for every user. Useful as a sanity check after a crash
+ * or after migrating from the old "compute on every read" accounting model.
+ *
+ * Shows before/after/drift per user so the admin can spot drift at a glance.
+ */
+function QuotaMaintenanceCard() {
+  const [running, setRunning] = React.useState(false);
+  const [result, setResult] = React.useState<{
+    recomputed: number;
+    users: Array<{ id: string; username: string; before: string; after: string; drift: string }>;
+  } | null>(null);
+
+  const run = async () => {
+    setRunning(true);
+    try {
+      const r = await api.adminRecomputeQuotas();
+      setResult(r);
+      toast.success(`Пересчитано квот: ${r.recomputed}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Не удалось пересчитать");
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <Card className="border-border/40">
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <HardDrive className="h-5 w-5 text-primary" />
+          <CardTitle className="text-lg">Обслуживание квот</CardTitle>
+        </div>
+        <CardDescription>
+          Пересчитать счётчик использованного места для всех пользователей.
+          Запускайте после сбоев или если подозреваете расхождение с реальностью.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <Button onClick={run} disabled={running} variant="secondary" className="gap-1.5">
+          {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Activity className="h-4 w-4" />}
+          Пересчитать сейчас
+        </Button>
+
+        {result && (
+          <div className="rounded-md border border-border/40 overflow-hidden">
+            <div className="grid grid-cols-[1fr_auto_auto_auto] gap-2 px-3 py-2 bg-muted/50 text-xs font-medium text-muted-foreground">
+              <div>Пользователь</div>
+              <div className="text-right">Было</div>
+              <div className="text-right">Стало</div>
+              <div className="text-right">Δ</div>
+            </div>
+            {result.users.map((u) => {
+              const drift = BigInt(u.drift);
+              const driftColor = drift === 0n
+                ? "text-muted-foreground"
+                : drift > 0n
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : "text-destructive";
+              return (
+                <div
+                  key={u.id}
+                  className="grid grid-cols-[1fr_auto_auto_auto] gap-2 px-3 py-2 text-sm border-t border-border/30"
+                >
+                  <div className="truncate font-mono">@{u.username}</div>
+                  <div className="text-right tabular-nums">{formatBytes(u.before)}</div>
+                  <div className="text-right tabular-nums">{formatBytes(u.after)}</div>
+                  <div className={`text-right tabular-nums ${driftColor}`}>
+                    {drift > 0n ? "+" : ""}{formatBytes(drift)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

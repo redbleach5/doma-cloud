@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getSession } from "@/lib/auth/session";
 import { getStorage, buildStorageKey } from "@/lib/storage";
-import { sanitizeName, computeDirectorySize } from "@/lib/cloud/tree";
+import { sanitizeName } from "@/lib/cloud/tree";
 import { guessMime } from "@/lib/cloud/mime";
 import { rateLimit, LIMITS } from "@/lib/auth/rate-limit";
 import { randomUUID } from "node:crypto";
@@ -72,8 +72,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Пользователь не найден" }, { status: 404 });
   }
 
-  const usedBytes = await computeDirectorySize(user.id, null);
-  if (contentLength > 0 && BigInt(usedBytes) + BigInt(contentLength) > user.quotaBytes) {
+  // Use the cached `usedBytes` column for quota check — maintained
+  // incrementally by upload/delete, O(1) instead of O(N) tree traversal.
+  const usedBytes = user.usedBytes;
+  if (contentLength > 0 && usedBytes + BigInt(contentLength) > user.quotaBytes) {
     return NextResponse.json(
       {
         error: "Превышен лимит места",
@@ -97,7 +99,7 @@ export async function POST(req: NextRequest) {
 
   // Double-check quota using actual file sizes (more accurate than Content-Length).
   const totalIncoming = files.reduce((sum, f) => sum + f.size, 0);
-  if (BigInt(usedBytes) + BigInt(totalIncoming) > user.quotaBytes) {
+  if (usedBytes + BigInt(totalIncoming) > user.quotaBytes) {
     return NextResponse.json(
       {
         error: "Превышен лимит места",
@@ -132,7 +134,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const created: unknown[] = [];
+  const created: Array<{ id: string; name: string; sizeBytes: string; mimeType: string }> = [];
 
   for (const file of files) {
     const safeName = sanitizeName(file.name);
@@ -192,12 +194,19 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // Update user.usedBytes (eventually-consistent counter).
-  const newUsed = await computeDirectorySize(user.id, null);
+  // Update user.usedBytes incrementally — O(1) instead of O(N) tree walk.
+  // We add the actual stored byte count (sum of result.sizeBytes), which may
+  // differ slightly from totalIncoming if a storage backend dedupes or
+  // truncates — but for local FS and S3 it's exactly the file size.
+  const totalStored = created.reduce(
+    (sum, c) => sum + BigInt(c.sizeBytes),
+    0n
+  );
   await db.user.update({
     where: { id: user.id },
-    data: { usedBytes: newUsed },
+    data: { usedBytes: { increment: totalStored } },
   });
+  const newUsed = usedBytes + totalStored;
 
   return NextResponse.json({ created, usedBytes: newUsed.toString() });
 }

@@ -33,6 +33,10 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/prisma ./prisma
+# Native modules used at runtime — standalone output doesn't always include
+# them automatically. @node-rs/argon2 has prebuilt .node binaries that must
+# be present for password hashing to work.
+COPY --from=builder /app/node_modules/@node-rs ./node_modules/@node-rs
 
 # Database directory (mounted as a volume).
 RUN mkdir -p /app/db /data/doma-storage \

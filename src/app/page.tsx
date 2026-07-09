@@ -1,6 +1,5 @@
 import { db } from "@/lib/db";
 import { CloudApp } from "@/components/cloud/cloud-app";
-import { computeDirectorySize } from "@/lib/cloud/tree";
 
 export const dynamic = "force-dynamic";
 
@@ -22,14 +21,14 @@ async function getMe() {
   if (!session) return null;
   const user = await db.user.findUnique({ where: { id: session.sub } });
   if (!user) return null;
-  const usedBytes = await computeDirectorySize(user.id, null);
+  // Read the cached `usedBytes` — maintained incrementally by upload/delete.
   return {
     id: user.id,
     username: user.username,
     displayName: user.displayName,
     role: user.role as "admin" | "user",
     quotaBytes: user.quotaBytes.toString(),
-    usedBytes: usedBytes.toString(),
+    usedBytes: user.usedBytes.toString(),
     createdAt: user.createdAt.toISOString(),
   };
 }
