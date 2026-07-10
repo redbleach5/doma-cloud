@@ -4,13 +4,6 @@ import * as React from "react";
 import type { FileItem } from "@/lib/cloud/api";
 import { api } from "@/lib/cloud/api";
 import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
-import {
   Eye,
   Share2,
   Pencil,
@@ -37,59 +30,45 @@ interface Props {
 }
 
 /**
- * Adaptive context menu: uses Radix ContextMenu on desktop (right-click) and
- * a positioned popover on touch devices (long-press).
- *
- * We always render the Radix ContextMenu so right-click works everywhere.
- * For long-press, we additionally render a manual popover anchored at the
- * provided {x, y} coordinates.
+ * Positioned action menu for files — opened by right-click or long-press.
+ * Uses a manual popover (not Radix ContextMenu) so clicks reliably reach
+ * the action buttons.
  */
 export function FileContextMenu(props: Props) {
-  const { item, x, y, view, onClose, onOpen, onPreview, onShare, onRenamed, onTrashed, onRestored, onPurged } = props;
-  const [menuPos, setMenuPos] = React.useState<{ x: number; y: number } | null>(null);
+  const {
+    item, x, y, view, onClose, onOpen, onPreview, onShare,
+    onRenamed, onTrashed, onRestored, onPurged,
+  } = props;
+  const menuRef = React.useRef<HTMLDivElement>(null);
 
-  // Detect if this was triggered by touch (long-press) — show manual popover.
-  // We use a small delay to let Radix try its native ContextMenu first on
-  // desktop right-click; if a contextmenu event fires in that window, we
-  // assume Radix handled it and don't show the manual popover (otherwise
-  // both menus would appear simultaneously on desktop).
+  // Close on outside left-click, scroll, or Escape.
   React.useEffect(() => {
-    let cancelled = false;
-    const onNativeContextMenu = () => {
-      cancelled = true;
-    };
-    window.addEventListener("contextmenu", onNativeContextMenu, { once: true });
-    const timer = setTimeout(() => {
-      window.removeEventListener("contextmenu", onNativeContextMenu);
-      if (!cancelled) setMenuPos({ x, y });
-    }, 80);
-    return () => {
-      window.removeEventListener("contextmenu", onNativeContextMenu);
-      clearTimeout(timer);
-    };
-  }, [x, y]);
+    const close = () => onClose();
 
-  // Close popover on outside click / scroll / Esc.
-  React.useEffect(() => {
-    if (!menuPos) return;
-    const close = () => {
-      setMenuPos(null);
-      onClose();
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      const el = menuRef.current;
+      if (el && e.target instanceof Node && el.contains(e.target)) return;
+      close();
     };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+
+    // Capture phase so we run before other handlers; menu uses stopPropagation.
+    document.addEventListener("pointerdown", onPointerDown, true);
     window.addEventListener("scroll", close, true);
-    window.addEventListener("click", close);
-    window.addEventListener("contextmenu", close);
-    const escHandler = (e: KeyboardEvent) => e.key === "Escape" && close();
-    window.addEventListener("keydown", escHandler);
+    window.addEventListener("keydown", onKeyDown);
     return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
       window.removeEventListener("scroll", close, true);
-      window.removeEventListener("click", close);
-      window.removeEventListener("contextmenu", close);
-      window.removeEventListener("keydown", escHandler);
+      window.removeEventListener("keydown", onKeyDown);
     };
-  }, [menuPos, onClose]);
+  }, [onClose]);
 
   const handleRename = async () => {
+    onClose();
     const name = window.prompt("Новое имя:", item.name);
     if (!name?.trim() || name === item.name) return;
     try {
@@ -102,6 +81,7 @@ export function FileContextMenu(props: Props) {
   };
 
   const handleTrash = async () => {
+    onClose();
     try {
       await api.trash(item.id);
       toast.success("Перемещено в корзину");
@@ -112,6 +92,7 @@ export function FileContextMenu(props: Props) {
   };
 
   const handleRestore = async () => {
+    onClose();
     try {
       await api.restore(item.id);
       toast.success("Восстановлено");
@@ -122,6 +103,7 @@ export function FileContextMenu(props: Props) {
   };
 
   const handlePurge = async () => {
+    onClose();
     if (!window.confirm(`Удалить навсегда: «${item.name}»? Это действие необратимо.`)) return;
     try {
       await api.purge(item.id);
@@ -133,6 +115,7 @@ export function FileContextMenu(props: Props) {
   };
 
   const handleDownload = () => {
+    onClose();
     const a = document.createElement("a");
     a.href = api.downloadUrl(item.id);
     a.download = item.name;
@@ -143,6 +126,7 @@ export function FileContextMenu(props: Props) {
   };
 
   const handleCopyLink = async () => {
+    onClose();
     try {
       const share = await api.createShare(item.id, {});
       const url = window.location.origin + share.url;
@@ -153,141 +137,85 @@ export function FileContextMenu(props: Props) {
     }
   };
 
-  const menuItems = (
-    <>
+  const handleShare = () => {
+    onClose();
+    onShare(item);
+  };
+
+  const handleOpen = () => {
+    onClose();
+    if (item.isDirectory) onOpen(item);
+    else onPreview(item);
+  };
+
+  return (
+    <div
+      ref={menuRef}
+      role="menu"
+      className="fixed z-50 min-w-48 rounded-lg border border-border bg-popover p-1 shadow-xl animate-in fade-in-0 zoom-in-95"
+      style={{
+        left: Math.min(x, window.innerWidth - 220),
+        top: Math.min(y, window.innerHeight - 280),
+      }}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground truncate border-b border-border/40 mb-1">
+        {item.name}
+      </div>
       {view === "files" && (
         <>
-          <ContextMenuItem onClick={() => (item.isDirectory ? onOpen(item) : onPreview(item))}>
+          <MenuItem onClick={handleOpen}>
             <Eye className="h-4 w-4 mr-2" />
             {item.isDirectory ? "Открыть" : "Просмотр"}
-          </ContextMenuItem>
+          </MenuItem>
           {!item.isDirectory && (
-            <ContextMenuItem onClick={handleDownload}>
+            <MenuItem onClick={handleDownload}>
               <Download className="h-4 w-4 mr-2" />
               Скачать
-            </ContextMenuItem>
+            </MenuItem>
           )}
           {!item.isDirectory && (
             <>
-              <ContextMenuItem onClick={() => onShare(item)}>
+              <MenuItem onClick={handleShare}>
                 <Share2 className="h-4 w-4 mr-2" />
                 Поделиться
-              </ContextMenuItem>
-              <ContextMenuItem onClick={handleCopyLink}>
+              </MenuItem>
+              <MenuItem onClick={handleCopyLink}>
                 <Copy className="h-4 w-4 mr-2" />
                 Копировать ссылку
-              </ContextMenuItem>
+              </MenuItem>
             </>
           )}
-          <ContextMenuSeparator />
-          <ContextMenuItem onClick={handleRename}>
+          <MenuSeparator />
+          <MenuItem onClick={handleRename}>
             <Pencil className="h-4 w-4 mr-2" />
             Переименовать
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem onClick={handleTrash} className="text-destructive focus:text-destructive">
+          </MenuItem>
+          <MenuSeparator />
+          <MenuItem onClick={handleTrash} variant="destructive">
             <Trash2 className="h-4 w-4 mr-2" />
             В корзину
-          </ContextMenuItem>
+          </MenuItem>
         </>
       )}
       {view === "trash" && (
         <>
-          <ContextMenuItem onClick={handleRestore}>
+          <MenuItem onClick={handleRestore}>
             <RotateCcw className="h-4 w-4 mr-2" />
             Восстановить
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem onClick={handlePurge} className="text-destructive focus:text-destructive">
+          </MenuItem>
+          <MenuSeparator />
+          <MenuItem onClick={handlePurge} variant="destructive">
             <Trash2 className="h-4 w-4 mr-2" />
             Удалить навсегда
-          </ContextMenuItem>
+          </MenuItem>
         </>
       )}
-    </>
-  );
-
-  return (
-    <>
-      {/* Hidden Radix ContextMenu — captures right-click globally on the trigger area.
-          We render it with an empty trigger so right-click anywhere still works
-          via the parent's onContextMenu handler. */}
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <div className="fixed inset-0 -z-10" aria-hidden />
-        </ContextMenuTrigger>
-        <ContextMenuContent>{menuItems}</ContextMenuContent>
-      </ContextMenu>
-
-      {/* Manual popover for long-press */}
-      {menuPos && (
-        <div
-          className="fixed z-50 min-w-48 rounded-lg border border-border bg-popover p-1 shadow-xl animate-in fade-in-0 zoom-in-95"
-          style={{
-            left: Math.min(menuPos.x, window.innerWidth - 220),
-            top: Math.min(menuPos.y, window.innerHeight - 280),
-          }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground truncate border-b border-border/40 mb-1">
-            {item.name}
-          </div>
-          {view === "files" && (
-            <>
-              <PopoverItem onClick={() => (item.isDirectory ? onOpen(item) : onPreview(item))}>
-                <Eye className="h-4 w-4 mr-2" />
-                {item.isDirectory ? "Открыть" : "Просмотр"}
-              </PopoverItem>
-              {!item.isDirectory && (
-                <PopoverItem onClick={handleDownload}>
-                  <Download className="h-4 w-4 mr-2" />
-                  Скачать
-                </PopoverItem>
-              )}
-              {!item.isDirectory && (
-                <>
-                  <PopoverItem onClick={() => onShare(item)}>
-                    <Share2 className="h-4 w-4 mr-2" />
-                    Поделиться
-                  </PopoverItem>
-                  <PopoverItem onClick={handleCopyLink}>
-                    <Copy className="h-4 w-4 mr-2" />
-                    Копировать ссылку
-                  </PopoverItem>
-                </>
-              )}
-              <PopoverSeparator />
-              <PopoverItem onClick={handleRename}>
-                <Pencil className="h-4 w-4 mr-2" />
-                Переименовать
-              </PopoverItem>
-              <PopoverSeparator />
-              <PopoverItem onClick={handleTrash} variant="destructive">
-                <Trash2 className="h-4 w-4 mr-2" />
-                В корзину
-              </PopoverItem>
-            </>
-          )}
-          {view === "trash" && (
-            <>
-              <PopoverItem onClick={handleRestore}>
-                <RotateCcw className="h-4 w-4 mr-2" />
-                Восстановить
-              </PopoverItem>
-              <PopoverSeparator />
-              <PopoverItem onClick={handlePurge} variant="destructive">
-                <Trash2 className="h-4 w-4 mr-2" />
-                Удалить навсегда
-              </PopoverItem>
-            </>
-          )}
-        </div>
-      )}
-    </>
+    </div>
   );
 }
 
-function PopoverItem({
+function MenuItem({
   children,
   onClick,
   variant = "default",
@@ -298,6 +226,8 @@ function PopoverItem({
 }) {
   return (
     <button
+      type="button"
+      role="menuitem"
       onClick={onClick}
       className={`w-full flex items-center px-2.5 py-2 rounded-md text-sm transition-colors ${
         variant === "destructive"
@@ -310,6 +240,6 @@ function PopoverItem({
   );
 }
 
-function PopoverSeparator() {
+function MenuSeparator() {
   return <div className="h-px bg-border/40 my-1" />;
 }
