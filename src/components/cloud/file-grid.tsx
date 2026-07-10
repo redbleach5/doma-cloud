@@ -66,7 +66,10 @@ function FileCard({ item, view, onOpen, onContext, onLongPress }: Omit<Props, "i
   };
 
   const isImage = item.category === "image";
-  const thumbUrl = isImage && view === "files" ? `/api/files/download/${item.id}` : null;
+  // Use the dedicated thumbnail endpoint instead of pulling the full-size
+  // image. A folder with 200 photos at 8 MB each would otherwise pull 1.6 GB
+  // through the browser on first paint.
+  const thumbUrl = isImage && view === "files" ? `/api/files/thumbnail/${item.id}?size=256` : null;
 
   return (
     <button

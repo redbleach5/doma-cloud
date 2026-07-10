@@ -37,6 +37,12 @@ COPY --from=builder /app/prisma ./prisma
 # them automatically. @node-rs/argon2 has prebuilt .node binaries that must
 # be present for password hashing to work.
 COPY --from=builder /app/node_modules/@node-rs ./node_modules/@node-rs
+# AWS SDK — used when STORAGE_DRIVER=s3. serverExternalPackages keeps it
+# out of the Next.js bundle, so we must copy it explicitly. Without this,
+# switching to S3 storage crashes with MODULE_NOT_FOUND on the first upload.
+COPY --from=builder /app/node_modules/@aws-sdk ./node_modules/@aws-sdk
+# sharp — used for on-the-fly thumbnail generation in /api/files/thumbnail.
+COPY --from=builder /app/node_modules/sharp ./node_modules/sharp
 
 # Database directory (mounted as a volume).
 RUN mkdir -p /app/db /data/doma-storage \

@@ -8,6 +8,7 @@ import {
 import { rateLimit, getClientIp, LIMITS } from "@/lib/auth/rate-limit";
 import { isUsernameTaken } from "@/lib/auth/users";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 
 const BodySchema = z.object({
   username: z
@@ -82,15 +83,29 @@ export async function POST(req: NextRequest) {
     : await getSetting("defaultQuotaBytes");
 
   const passwordHash = await hashPassword(password);
-  const user = await db.user.create({
-    data: {
-      username,
-      displayName: displayName ?? username,
-      passwordHash,
-      role: isAdmin ? "admin" : "user",
-      quotaBytes,
-    },
-  });
+  let user;
+  try {
+    user = await db.user.create({
+      data: {
+        username,
+        displayName: displayName ?? username,
+        passwordHash,
+        role: isAdmin ? "admin" : "user",
+        quotaBytes,
+      },
+    });
+  } catch (err) {
+    // P2002 = unique constraint violation. Two parallel registrations with
+    // the same username both pass the `isUsernameTaken` check, but only one
+    // can win the INSERT — the other gets P2002. Map to a friendly 409.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      return NextResponse.json(
+        { error: "Имя пользователя уже занято" },
+        { status: 409 }
+      );
+    }
+    throw err;
+  }
 
   const token = await signSession({
     sub: user.id,
@@ -108,6 +123,7 @@ export async function POST(req: NextRequest) {
       role: user.role,
       quotaBytes: user.quotaBytes.toString(),
       usedBytes: user.usedBytes.toString(),
+      createdAt: user.createdAt.toISOString(),
     },
     isFirstUser: isAdmin,
   });

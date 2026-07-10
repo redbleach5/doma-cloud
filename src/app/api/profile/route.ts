@@ -68,14 +68,22 @@ export async function PATCH(req: NextRequest) {
     data: update,
   });
 
+  // Return the FULL user object — the frontend (settings-view.tsx) merges the
+  // response into its current user state with `{ ...user, ...updated }`. If we
+  // omit fields here, the spread overwrites them with `undefined` and the
+  // quota/used-bytes indicator in the header/sidebar shows "— / —".
   return NextResponse.json({
     user: {
       id: user.id,
       username: user.username,
       displayName: user.displayName,
       role: user.role,
+      quotaBytes: user.quotaBytes.toString(),
+      usedBytes: user.usedBytes.toString(),
       birthday: user.birthday?.toISOString() ?? null,
       themePreference: user.themePreference,
+      createdAt: user.createdAt.toISOString(),
+      lastLoginAt: user.lastLoginAt?.toISOString() ?? null,
     },
   });
 }

@@ -28,6 +28,8 @@ export interface StorageBackend {
   put(key: string, data: Buffer | Readable | ReadableStream<Uint8Array>): Promise<UploadResult>;
   /** Fetch a file as a Node Readable stream (for piping to HTTP response). */
   get(key: string): Promise<Readable>;
+  /** Fetch a byte range [start, end] inclusive as a Node Readable stream. */
+  getRange(key: string, start: number, end: number): Promise<Readable>;
   /** Fetch a file fully into a Buffer (used for small previews). */
   getBuffer(key: string): Promise<Buffer>;
   /** Get a presigned or relative URL for direct access (optional). */
@@ -115,6 +117,12 @@ export class LocalFileStorage implements StorageBackend {
     const target = this.resolve(key);
     const { createReadStream } = await import("node:fs");
     return createReadStream(target);
+  }
+
+  async getRange(key: string, start: number, end: number): Promise<Readable> {
+    const target = this.resolve(key);
+    const { createReadStream } = await import("node:fs");
+    return createReadStream(target, { start, end });
   }
 
   async getBuffer(key: string): Promise<Buffer> {
@@ -209,6 +217,12 @@ export function resetStorageCache(): void {
 
 /** Build a content-addressed storage key. Format: <ownerId>/<fileId>/<safeName> */
 export function buildStorageKey(ownerId: string, fileId: string, name: string): string {
-  const safe = name.replace(/[\\/:*?"<>|]/g, "_").slice(0, 180);
+  // Strip path separators, Windows-illegal chars, and control chars
+  // (\u0000-\u001f). Control chars in filenames break `ls`, `tar`, and many
+  // backup tools on Linux even though the kernel allows them.
+  const safe = name
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_")
+    .replace(/^\.+/, "")
+    .slice(0, 180);
   return `${ownerId}/${fileId}/${safe}`;
 }

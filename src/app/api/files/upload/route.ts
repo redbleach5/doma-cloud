@@ -193,18 +193,35 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // Update user.usedBytes incrementally — O(1) instead of O(N) tree walk.
-  // We add the actual stored byte count (sum of result.sizeBytes), which may
-  // differ slightly from totalIncoming if a storage backend dedupes or
-  // truncates — but for local FS and S3 it's exactly the file size.
+  // Update user.usedBytes — ATOMIC conditional UPDATE prevents TOCTOU races
+  // where two parallel uploads both pass the pre-check and then both
+  // increment, exceeding the quota. If 0 rows are affected, we delete the
+  // just-stored files and return 413.
   const totalStored = created.reduce(
     (sum, c) => sum + BigInt(c.sizeBytes),
     0n
   );
-  await db.user.update({
-    where: { id: user.id },
-    data: { usedBytes: { increment: totalStored } },
-  });
+  const quotaResult = await db.$executeRaw`
+    UPDATE User
+    SET usedBytes = usedBytes + ${totalStored}
+    WHERE id = ${user.id}
+      AND usedBytes + ${totalStored} <= quotaBytes
+  `;
+  if (quotaResult === 0) {
+    // Quota exceeded by a concurrent upload — clean up the files we just wrote.
+    for (const c of created) {
+      const sk = buildStorageKey(user.id, c.id, c.name);
+      await storage.delete(sk).catch(() => undefined);
+    }
+    // Best-effort: also delete the DB rows we just created.
+    for (const c of created) {
+      await db.fileNode.delete({ where: { id: c.id } }).catch(() => undefined);
+    }
+    return NextResponse.json(
+      { error: "Превышен лимит места (конкурентная загрузка)" },
+      { status: 413 }
+    );
+  }
   const newUsed = usedBytes + totalStored;
 
   return NextResponse.json({ created, usedBytes: newUsed.toString() });

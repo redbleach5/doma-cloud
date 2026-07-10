@@ -12,6 +12,20 @@ import { NextRequest, NextResponse } from "next/server";
  * multi-instance deployment, move rate limiting to a Redis-backed middleware.
  */
 
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "media-src 'self' blob:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "frame-ancestors 'none'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join("; ");
+
 export function middleware(_req: NextRequest) {
   const res = NextResponse.next();
 
@@ -27,6 +41,11 @@ export function middleware(_req: NextRequest) {
     "Permissions-Policy",
     "camera=(), microphone=(), geolocation=(), interest-cohort=()"
   );
+  // Content Security Policy — restricts script/style/img sources to self,
+  // blocks inline scripts, prevents XSS from user-uploaded HTML/SVG being
+  // served from the same origin (download endpoint hardening).
+  // `style-src 'unsafe-inline'` is needed for Next.js styled-jsx + Tailwind.
+  res.headers.set("Content-Security-Policy", CSP);
 
   // ---- Share-page cache prevention ----
   // Share pages must never be cached by the browser or a CDN — they may

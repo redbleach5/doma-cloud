@@ -88,7 +88,13 @@ export function useSpringZoom() {
     if (e.touches.length < 2) pinchRef.current = null;
   }, []);
 
-  // Spring physics loop
+  // Spring physics loop — runs only while the spring is in motion.
+  //
+  // The previous implementation scheduled `requestAnimationFrame(tick)`
+  // unconditionally on every frame, even after the spring settled. That kept
+  // a 60 fps RAF loop running forever while the preview was open, draining
+  // CPU/GPU and battery on mobile. Now we stop scheduling RAF when the spring
+  // is at rest, and restart it from `setTarget` when the user zooms.
   React.useEffect(() => {
     const tick = () => {
       const s = stateRef.current;
@@ -97,20 +103,51 @@ export function useSpringZoom() {
       const newScale = s.scale + newVelocity;
 
       if (Math.abs(s.target - newScale) < 0.001 && Math.abs(newVelocity) < 0.001) {
-        // Settled — snap to target exactly.
+        // Settled — snap to target exactly and STOP the RAF loop.
         if (s.scale !== s.target) {
           setState({ scale: s.target, target: s.target, velocity: 0 });
         }
+        rafRef.current = null;
+        return;
       } else {
         setState({ scale: newScale, target: s.target, velocity: newVelocity });
+        rafRef.current = requestAnimationFrame(tick);
       }
-      rafRef.current = requestAnimationFrame(tick);
     };
-    rafRef.current = requestAnimationFrame(tick);
+    // Kick off the loop only if the spring is currently in motion.
+    if (stateRef.current.scale !== stateRef.current.target || Math.abs(stateRef.current.velocity) > 0.001) {
+      rafRef.current = requestAnimationFrame(tick);
+    }
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
     };
   }, []);
+
+  // Restart the RAF loop when the user changes the target (wheel / pinch / button).
+  // Without this, after the spring settles the first time, subsequent zoom
+  // interactions would update `target` but no RAF would be running to chase it.
+  React.useEffect(() => {
+    if (state.scale === state.target && Math.abs(state.velocity) < 0.001) return;
+    if (rafRef.current !== null) return; // already running
+    const tick = () => {
+      const s = stateRef.current;
+      const force = (s.target - s.scale) * SPRING_STIFFNESS;
+      const newVelocity = (s.velocity + force) * SPRING_DAMPING;
+      const newScale = s.scale + newVelocity;
+      if (Math.abs(s.target - newScale) < 0.001 && Math.abs(newVelocity) < 0.001) {
+        if (s.scale !== s.target) {
+          setState({ scale: s.target, target: s.target, velocity: 0 });
+        }
+        rafRef.current = null;
+        return;
+      } else {
+        setState({ scale: newScale, target: s.target, velocity: newVelocity });
+        rafRef.current = requestAnimationFrame(tick);
+      }
+    };
+    rafRef.current = requestAnimationFrame(tick);
+  }, [state.target]);
 
   return {
     scale: state.scale,

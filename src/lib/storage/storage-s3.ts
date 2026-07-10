@@ -48,6 +48,7 @@ export class S3FileStorage implements StorageBackend {
             secretAccessKey: this.cfg.secretKey,
           },
           forcePathStyle: this.cfg.forcePathStyle ?? true,
+          maxAttempts: 5,
         });
         return { client, Upload };
       })();
@@ -99,6 +100,19 @@ export class S3FileStorage implements StorageBackend {
     return res.body as Readable;
   }
 
+  async getRange(key: string, start: number, end: number): Promise<Readable> {
+    const { client } = await this.getClient();
+    const { GetObjectCommand } = await import("@aws-sdk/client-s3");
+    const res = await client.send(
+      new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Range: `bytes=${start}-${end}`,
+      })
+    );
+    return res.body as Readable;
+  }
+
   async getBuffer(key: string): Promise<Buffer> {
     const stream = await this.get(key);
     const chunks: Buffer[] = [];
@@ -116,8 +130,11 @@ export class S3FileStorage implements StorageBackend {
     const { client } = await this.getClient();
     const { HeadObjectCommand } = await import("@aws-sdk/client-s3");
     const res = await client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
+    if (res.ContentLength == null) {
+      throw new Error(`S3 HeadObject for ${key} returned no ContentLength`);
+    }
     return {
-      size: res.ContentLength ?? 0,
+      size: res.ContentLength,
       mtime: res.LastModified ?? new Date(),
     };
   }

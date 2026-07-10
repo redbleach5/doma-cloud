@@ -71,7 +71,8 @@ function FileRow({ item, view, onOpen, onContext, onLongPress }: Omit<Props, "it
   };
 
   const isImage = item.category === "image";
-  const thumbUrl = isImage && view === "files" ? `/api/files/download/${item.id}` : null;
+  // Use the dedicated thumbnail endpoint instead of pulling the full-size image.
+  const thumbUrl = isImage && view === "files" ? `/api/files/thumbnail/${item.id}?size=64` : null;
 
   return (
     <button

@@ -6,6 +6,9 @@
 # Routing:
 #   /dav/*  → webdav:3001  (WebDAV для файловых менеджеров)
 #   /*      → doma:3000    (основное приложение)
+#
+# Security: HTTP (port 80) only redirects to HTTPS — Basic Auth credentials
+# and session cookies must never travel in plaintext over the LAN.
 
 {
     admin off
@@ -20,6 +23,15 @@
     }
 
     encode zstd gzip
+
+    # Global security headers — applied to every response (app + webdav).
+    header {
+        Strict-Transport-Security "max-age=31536000"
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+        Permissions-Policy "camera=(), microphone=(), geolocation=(), interest-cohort=()"
+    }
 
     # Large upload limit — 50 GB per request (for big videos via WebDAV).
     request_body {
@@ -52,28 +64,11 @@
     }
 }
 
-# HTTP redirect (optional — keep HTTP available for LAN clients that don't trust the cert).
+# HTTP → HTTPS redirect only.
+# Previously this block reverse-proxied :80 directly to the app, which meant
+# Basic Auth credentials (Authorization: Basic ...) and session cookies
+# travelled in plaintext over the LAN — anyone running tcpdump on the WiFi
+# could grab them. Now port 80 only issues a 301 to the HTTPS URL.
 :80 {
-    @webdav {
-        path /dav* /webdav-health
-    }
-    handle @webdav {
-        reverse_proxy webdav:3001 {
-            header_up Host {host}
-            header_up X-Real-IP {remote_host}
-            header_up X-Forwarded-For {remote_host}
-            header_up X-Forwarded-Proto {scheme}
-            flush_interval -1
-        }
-    }
-
-    handle {
-        reverse_proxy doma:3000 {
-            header_up Host {host}
-            header_up X-Real-IP {remote_host}
-            header_up X-Forwarded-For {remote_host}
-            header_up X-Forwarded-Proto {scheme}
-            flush_interval -1
-        }
-    }
+    redir https://{host}{uri} 301
 }

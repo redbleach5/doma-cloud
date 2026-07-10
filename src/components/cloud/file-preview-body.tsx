@@ -101,8 +101,20 @@ function ImagePreview({ url, name }: { url: string; name: string }) {
 }
 
 function VideoPreview({ url, mimeType }: { url: string; mimeType: string }) {
+  const ref = React.useRef<HTMLVideoElement>(null);
+  // Pause the video when the component unmounts. Without this, the audio
+  // track keeps playing in the background after the user closes the preview
+  // dialog (especially on Safari/iOS).
+  React.useEffect(() => {
+    return () => {
+      ref.current?.pause();
+      ref.current?.removeAttribute("src");
+      ref.current?.load();
+    };
+  }, []);
   return (
     <video
+      ref={ref}
       src={url}
       controls
       autoPlay
@@ -115,6 +127,14 @@ function VideoPreview({ url, mimeType }: { url: string; mimeType: string }) {
 }
 
 function AudioPreview({ url, name, mimeType }: { url: string; name: string; mimeType: string }) {
+  const ref = React.useRef<HTMLAudioElement>(null);
+  React.useEffect(() => {
+    return () => {
+      ref.current?.pause();
+      ref.current?.removeAttribute("src");
+      ref.current?.load();
+    };
+  }, []);
   return (
     <div className="flex flex-col items-center gap-6 p-8 max-w-md w-full">
       <div className="h-48 w-48 rounded-3xl bg-gradient-to-br from-primary/30 to-primary/5 flex items-center justify-center shadow-inner ring-4 ring-primary/10">
@@ -126,7 +146,7 @@ function AudioPreview({ url, name, mimeType }: { url: string; name: string; mime
         <div className="font-medium text-lg truncate" title={name}>{name}</div>
         <div className="text-xs text-muted-foreground mt-0.5">{mimeType}</div>
       </div>
-      <audio src={url} controls autoPlay className="w-full">
+      <audio ref={ref} src={url} controls autoPlay className="w-full">
         <source src={url} type={mimeType} />
       </audio>
     </div>
@@ -144,17 +164,21 @@ function TextPreview({ url, category, name }: { url: string; category: string; n
   const [error, setError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
-    let cancelled = false;
-    fetch(url)
+    // Use AbortController so the fetch is actually cancelled when the user
+    // closes the preview. The previous `cancelled` flag only prevented
+    // setState-after-unmount — the network request kept going, wasting
+    // bandwidth for large text files.
+    const controller = new AbortController();
+    fetch(url, { signal: controller.signal })
       .then((r) => {
         if (!r.ok) throw new Error("Не удалось загрузить");
         return r.text();
       })
-      .then((txt) => !cancelled && setContent(txt))
-      .catch((e) => !cancelled && setError(e.message));
-    return () => {
-      cancelled = true;
-    };
+      .then((txt) => setContent(txt))
+      .catch((e) => {
+        if (e?.name !== "AbortError") setError(e?.message ?? "Ошибка");
+      });
+    return () => controller.abort();
   }, [url]);
 
   if (error) return <div className="text-destructive p-4">{error}</div>;

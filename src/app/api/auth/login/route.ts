@@ -82,6 +82,7 @@ export async function POST(req: NextRequest) {
       role: user.role,
       quotaBytes: user.quotaBytes.toString(),
       usedBytes: user.usedBytes.toString(),
+      createdAt: user.createdAt.toISOString(),
     },
   });
 }

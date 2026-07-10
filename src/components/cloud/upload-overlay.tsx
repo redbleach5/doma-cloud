@@ -22,12 +22,39 @@ interface UploadState {
   error?: string;
 }
 
+/** Unique id for each file entry — survives duplicate names/sizes. */
+function makeFileId(): string {
+  // crypto.randomUUID is available in all modern browsers + secure contexts.
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+interface FileEntry {
+  file: File;
+  id: string;
+}
+
 export function UploadOverlay({ files, parentId, onDone, onCancel }: Props) {
   const uploadVisible = useCloudStore((s) => s.uploadVisible);
   const [states, setStates] = React.useState<Record<string, UploadState>>({});
   const [completedCount, setCompletedCount] = React.useState(0);
   const [errorCount, setErrorCount] = React.useState(0);
   const startedRef = React.useRef(false);
+
+  // cancelRef — set to true when the user clicks "✕" or when a fresh batch
+  // supersedes the in-flight one. The running `start()` loop checks this flag
+  // at the top of each iteration and bails out. Without this, dropping a
+  // second batch while the first is still uploading would spawn two parallel
+  // `start()` loops, each with its own stale closure of `files`.
+  const cancelRef = React.useRef(false);
+
+  // Track the AbortControllers for in-flight uploads so the user-visible
+  // "Cancel" button can actually abort the HTTP request, not just hide the
+  // overlay. Previously the upload kept running in the background after the
+  // overlay was dismissed — wasting bandwidth, quota, and disk space.
+  const abortRef = React.useRef<AbortController | null>(null);
 
   // Stable callbacks to avoid re-creating `start` on every parent render.
   const onDoneRef = React.useRef(onDone);
@@ -37,32 +64,45 @@ export function UploadOverlay({ files, parentId, onDone, onCancel }: Props) {
     onCancelRef.current = onCancel;
   }, [onDone, onCancel]);
 
-  // Reset internal state whenever a fresh batch of files arrives.
-  // We detect "fresh batch" by tracking the file signature (name+size list).
-  const filesSignature = React.useMemo(
-    () => files.map((f) => `${f.name}:${f.size}`).join("|"),
+  // Build a stable list of file entries with unique ids. The id is used as
+  // the React key and as the state-lookup key — fixes the previous bug where
+  // two files with the same name+size would collide and one would silently
+  // disappear from the UI.
+  const entries = React.useMemo<FileEntry[]>(
+    () => files.map((file) => ({ file, id: makeFileId() })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [files]
+  );
+
+  // Reset internal state whenever a fresh batch of files arrives.
+  const filesSignature = React.useMemo(
+    () => entries.map((e) => `${e.id}:${e.file.name}:${e.file.size}`).join("|"),
+    [entries]
   );
   const lastSigRef = React.useRef<string>("");
   React.useEffect(() => {
     if (filesSignature !== lastSigRef.current) {
       lastSigRef.current = filesSignature;
+      // Signal any in-flight `start()` to bail out before we reset state.
+      cancelRef.current = true;
+      if (abortRef.current) abortRef.current.abort();
       setStates({});
       setCompletedCount(0);
       setErrorCount(0);
       startedRef.current = false;
+      cancelRef.current = false;
     }
   }, [filesSignature]);
 
   const start = React.useCallback(async () => {
-    const currentFiles = files;
-    if (currentFiles.length === 0) {
+    const currentEntries = entries;
+    if (currentEntries.length === 0) {
       onDoneRef.current();
       return;
     }
     setStates(() => {
       const next: Record<string, UploadState> = {};
-      for (const f of currentFiles) next[f.name + f.size] = { status: "pending", progress: 0 };
+      for (const e of currentEntries) next[e.id] = { status: "pending", progress: 0 };
       return next;
     });
     setCompletedCount(0);
@@ -71,52 +111,66 @@ export function UploadOverlay({ files, parentId, onDone, onCancel }: Props) {
     let doneCount = 0;
     let errCount = 0;
     // Upload sequentially to keep quota checks accurate and avoid hammering.
-    for (const file of currentFiles) {
-      const key = file.name + file.size;
-      setStates((s) => ({ ...s, [key]: { status: "uploading", progress: 0 } }));
+    for (const entry of currentEntries) {
+      // Bail out if the user cancelled or a new batch superseded this one.
+      if (cancelRef.current) return;
+
+      const controller = new AbortController();
+      abortRef.current = controller;
       try {
-        await api.uploadFiles([file], parentId, (pct) => {
-          setStates((s) => ({ ...s, [key]: { status: "uploading", progress: pct } }));
-        });
-        setStates((s) => ({ ...s, [key]: { status: "done", progress: 100 } }));
+        setStates((s) => ({ ...s, [entry.id]: { status: "uploading", progress: 0 } }));
+        await api.uploadFiles([entry.file], parentId, (pct) => {
+          setStates((s) => ({ ...s, [entry.id]: { status: "uploading", progress: pct } }));
+        }, controller.signal);
+        setStates((s) => ({ ...s, [entry.id]: { status: "done", progress: 100 } }));
         doneCount += 1;
         setCompletedCount(doneCount);
       } catch (err) {
+        if (controller.signal.aborted) {
+          // User cancelled — stop the whole batch, don't mark as error.
+          return;
+        }
         const msg = err instanceof Error ? err.message : "Ошибка загрузки";
-        setStates((s) => ({ ...s, [key]: { status: "error", progress: 0, error: msg } }));
+        setStates((s) => ({ ...s, [entry.id]: { status: "error", progress: 0, error: msg } }));
         errCount += 1;
         setErrorCount(errCount);
-        toast.error(`${file.name}: ${msg}`);
+        toast.error(`${entry.file.name}: ${msg}`);
+      } finally {
+        abortRef.current = null;
       }
     }
 
     if (doneCount > 0) {
-      toast.success(`Загружено файлов: ${doneCount} из ${currentFiles.length}`);
+      toast.success(`Загружено файлов: ${doneCount} из ${currentEntries.length}`);
     }
 
-    // Auto-close the overlay shortly after a fully successful batch,
-    // so the user isn't forced to click "Готово" and the overlay doesn't
-    // block buttons underneath (especially on mobile).
-    if (errCount === 0 && doneCount === currentFiles.length) {
+    // Auto-close the overlay shortly after a fully successful batch.
+    if (errCount === 0 && doneCount === currentEntries.length) {
       setTimeout(() => {
         onDoneRef.current();
       }, 1200);
     }
-  }, [files, parentId]);
+  }, [entries, parentId]);
 
   React.useEffect(() => {
-    if (uploadVisible && files.length > 0 && !startedRef.current) {
+    if (uploadVisible && entries.length > 0 && !startedRef.current) {
       startedRef.current = true;
       start();
     }
     if (!uploadVisible) startedRef.current = false;
-  }, [uploadVisible, files, start]);
+  }, [uploadVisible, entries, start]);
 
-  if (!uploadVisible || files.length === 0) return null;
+  const handleCancel = React.useCallback(() => {
+    cancelRef.current = true;
+    if (abortRef.current) abortRef.current.abort();
+    onCancelRef.current();
+  }, []);
 
-  const allDone = completedCount === files.length && errorCount === 0;
+  if (!uploadVisible || entries.length === 0) return null;
+
+  const allDone = completedCount === entries.length && errorCount === 0;
   const anyError = errorCount > 0;
-  const finished = completedCount + errorCount === files.length;
+  const finished = completedCount + errorCount === entries.length;
 
   return (
     <div className="fixed bottom-4 right-4 z-40 w-[calc(100vw-2rem)] max-w-sm animate-in slide-in-from-bottom-4">
@@ -135,9 +189,9 @@ export function UploadOverlay({ files, parentId, onDone, onCancel }: Props) {
                 {allDone ? "Загрузка завершена" : anyError && finished ? "Загрузка с ошибками" : "Загружаем файлы"}
               </div>
               <div className="text-xs text-muted-foreground">
-                {completedCount} / {files.length}
-                {!allDone && files.length > 0 && (
-                  <> · {formatBytes(files.reduce((s, f) => s + f.size, 0))}</>
+                {completedCount} / {entries.length}
+                {!allDone && entries.length > 0 && (
+                  <> · {formatBytes(entries.reduce((s, e) => s + e.file.size, 0))}</>
                 )}
               </div>
             </div>
@@ -149,7 +203,7 @@ export function UploadOverlay({ files, parentId, onDone, onCancel }: Props) {
               </Button>
             )}
             {!finished && (
-              <Button size="icon" variant="ghost" onClick={onCancel} className="h-7 w-7" aria-label="Отменить">
+              <Button size="icon" variant="ghost" onClick={handleCancel} className="h-7 w-7" aria-label="Отменить">
                 <X className="h-4 w-4" />
               </Button>
             )}
@@ -157,11 +211,10 @@ export function UploadOverlay({ files, parentId, onDone, onCancel }: Props) {
         </div>
 
         <div className="max-h-72 overflow-y-auto">
-          {files.map((f) => {
-            const key = f.name + f.size;
-            const st = states[key] ?? { status: "pending", progress: 0 };
+          {entries.map((entry) => {
+            const st = states[entry.id] ?? { status: "pending", progress: 0 };
             return (
-              <div key={key} className="flex items-center gap-3 px-4 py-2.5 border-b border-border/40 last:border-b-0">
+              <div key={entry.id} className="flex items-center gap-3 px-4 py-2.5 border-b border-border/40 last:border-b-0">
                 <div className="h-8 w-8 rounded-lg bg-muted/60 flex items-center justify-center shrink-0">
                   {st.status === "done" ? (
                     <CheckCircle2 className="h-4 w-4 text-emerald-500" />
@@ -175,9 +228,9 @@ export function UploadOverlay({ files, parentId, onDone, onCancel }: Props) {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-baseline justify-between gap-2">
-                    <div className="text-sm font-medium truncate">{f.name}</div>
+                    <div className="text-sm font-medium truncate">{entry.file.name}</div>
                     <div className="text-[11px] text-muted-foreground shrink-0">
-                      {formatBytes(f.size)}
+                      {formatBytes(entry.file.size)}
                     </div>
                   </div>
                   {st.status === "uploading" && (
@@ -186,7 +239,6 @@ export function UploadOverlay({ files, parentId, onDone, onCancel }: Props) {
                         className="relative h-full rounded-full transition-all duration-300 doma-flame-bar"
                         style={{ width: `${st.progress}%` }}
                       >
-                        {/* Flame tongue at the leading edge — flickers */}
                         {st.progress > 0 && st.progress < 100 && (
                           <div
                             className="doma-flame-tongue absolute -right-1 top-1/2 -translate-y-1/2 w-2 h-3 rounded-full"

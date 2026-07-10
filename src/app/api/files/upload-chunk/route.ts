@@ -60,6 +60,14 @@ interface ChunkMeta {
 
 function parseMeta(req: NextRequest): ChunkMeta | null {
   const uploadId = req.headers.get("x-upload-id");
+  // CRITICAL: uploadId is used to build filesystem paths (session.json lives
+  // at <root>/.uploads/<user>/<uploadId>/session.json). Without validation,
+  // an attacker could send `X-Upload-Id: ../../../../tmp/pwned` and write
+  // session.json (with controlled JSON content) into arbitrary directories —
+  // or trigger recursive `fs.rm` on arbitrary paths via the abort endpoint.
+  // We restrict to URL-safe characters and a sane length.
+  if (!uploadId || !/^[A-Za-z0-9_-]{1,64}$/.test(uploadId)) return null;
+
   // #3 — Client sends encodeURIComponent(file.name) in X-File-Name.
   // We MUST decode it here, otherwise the file is saved with a URL-encoded
   // name on disk (e.g. %D0%BA%D0%B8%D1%80.txt instead of кириллица.txt).
@@ -70,9 +78,10 @@ function parseMeta(req: NextRequest): ChunkMeta | null {
   const chunkIndex = parseInt(req.headers.get("x-chunk-index") ?? "0", 10);
   const chunkTotal = parseInt(req.headers.get("x-chunk-total") ?? "0", 10);
 
-  if (!uploadId || !fileName || !fileSize || !chunkTotal) return null;
+  if (!fileName || !fileSize || !chunkTotal) return null;
   if (chunkIndex < 0 || chunkIndex >= chunkTotal) return null;
   if (fileSize > Number.MAX_SAFE_INTEGER) return null;
+  if (chunkTotal > 20_000) return null; // 20k chunks × 5MB = 100GB cap
 
   return { uploadId, fileName, fileSize, fileMime, chunkIndex, chunkTotal };
 }
@@ -158,8 +167,10 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Quota check on the first chunk — use the cached `usedBytes` column
-  // (O(1)) instead of a full tree traversal.
+  // Quota check on the first chunk — atomic conditional UPDATE prevents
+  // TOCTOU races where two parallel uploads both pass the check and then both
+  // increment, exceeding the quota. We re-check atomically on the LAST chunk
+  // too (where the actual increment happens).
   if (meta.chunkIndex === 0) {
     const user = await db.user.findUnique({ where: { id: session.sub } });
     if (!user) {
@@ -218,46 +229,32 @@ export async function POST(req: NextRequest) {
   // Concatenate all chunks into the final storage key — STREAMING through the
   // storage abstraction so S3 and local FS both work.
   //
-  // We build a single composite Readable that sequentially emits each chunk's
-  // bytes (pulled via storage.get()), and feed it to storage.put() which
-  // hashes + counts bytes on the fly. Memory stays flat regardless of total
-  // file size.
+  // We use `Readable.from(async generator)` so backpressure is handled
+  // correctly by Node. The previous implementation used a manually-constructed
+  // `new Readable({ read() {} })` with an external IIFE pushing data and
+  // waiting for `'drain'` — but `Readable` does not emit `'drain'` (that's a
+  // `Writable` event), so the producer would hang forever once the internal
+  // buffer hit highWaterMark (~16 KB). On slow disks / S3 this deadlocked
+  // every chunked upload past the first 16 KB.
   const { createHash } = await import("node:crypto");
   const { Readable } = await import("node:stream");
   const hash = createHash("sha256");
   let totalSize = 0;
 
-  const compositeStream = new Readable({
-    async read() {
-      // No-op; data is pushed from the async loop below.
-    },
-  });
-
-  // Drive the composite stream: pull each chunk in order, push its bytes.
-  (async () => {
-    try {
-      for (let i = 0; i < meta.chunkTotal; i++) {
-        const ck = `${UPLOAD_TEMP_PREFIX}/${session.sub}/${meta.uploadId}/chunk-${i}`;
-        const chunkReadable = await storage.get(ck);
-        for await (const buf of chunkReadable) {
-          const b = buf as Buffer;
-          hash.update(b);
-          totalSize += b.length;
-          if (!compositeStream.push(b)) {
-            // Backpressure: wait for drain.
-            await new Promise<void>((resolve) => compositeStream.once("drain", resolve));
-          }
-        }
-        // Delete the chunk to free space as we go.
-        await storage.delete(ck).catch(() => undefined);
+  const compositeStream = Readable.from((async function* () {
+    for (let i = 0; i < meta.chunkTotal; i++) {
+      const ck = `${UPLOAD_TEMP_PREFIX}/${session.sub}/${meta.uploadId}/chunk-${i}`;
+      const chunkReadable = await storage.get(ck);
+      for await (const buf of chunkReadable) {
+        const b = buf as Buffer;
+        hash.update(b);
+        totalSize += b.length;
+        yield b;
       }
-      compositeStream.push(null); // end of stream
-    } catch (err) {
-      compositeStream.destroy(err instanceof Error ? err : new Error(String(err)));
+      // Delete the chunk to free space as we go.
+      await storage.delete(ck).catch(() => undefined);
     }
-  })().catch((err) => {
-    compositeStream.destroy(err instanceof Error ? err : new Error(String(err)));
-  });
+  })());
 
   // Stream the composite into the final storage key. storage.put() handles
   // hashing internally, but we recompute hash+size here because storage.put()
@@ -293,6 +290,25 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // ATOMIC quota enforcement — conditional UPDATE that only increments
+  // usedBytes if it would not exceed quotaBytes. If 0 rows are affected,
+  // another concurrent upload pushed us over the limit between the chunk-0
+  // check and now; we delete the just-assembled file and return 413.
+  const quotaResult = await db.$executeRaw`
+    UPDATE User
+    SET usedBytes = usedBytes + ${BigInt(totalSize)}
+    WHERE id = ${user.id}
+      AND usedBytes + ${BigInt(totalSize)} <= quotaBytes
+  `;
+  if (quotaResult === 0) {
+    await storage.delete(storageKey).catch(() => undefined);
+    await db.fileNode.delete({ where: { id: fileId } }).catch(() => undefined);
+    return NextResponse.json(
+      { error: "Превышен лимит места (конкурентная загрузка)" },
+      { status: 413 }
+    );
+  }
+
   // Create the DB record.
   // Use effectiveParentId (from the persisted session), NOT the raw query param.
   // Prefer the storage backend's hash if it computed one (it had to anyway);
@@ -312,16 +328,12 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  // Update user.usedBytes incrementally — O(1) instead of O(N) tree walk.
-  // totalSize is the actual assembled file size (verified above to match
-  // meta.fileSize), so adding it to the cached counter is exactly correct.
-  await db.user.update({
+  // Read the freshly-updated usedBytes to return to the client.
+  const refreshed = await db.user.findUnique({
     where: { id: user.id },
-    data: { usedBytes: { increment: BigInt(totalSize) } },
+    select: { usedBytes: true },
   });
-  // user.usedBytes is the pre-upload cached value; newUsed reflects the
-  // post-upload counter without an extra DB roundtrip.
-  const newUsed = user.usedBytes + BigInt(totalSize);
+  const newUsed = refreshed?.usedBytes ?? user.usedBytes + BigInt(totalSize);
 
   return NextResponse.json({
     uploadId: meta.uploadId,

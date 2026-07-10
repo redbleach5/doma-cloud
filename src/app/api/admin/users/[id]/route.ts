@@ -67,7 +67,10 @@ export async function PATCH(
       displayName: updated.displayName,
       role: updated.role,
       quotaBytes: updated.quotaBytes.toString(),
+      usedBytes: updated.usedBytes.toString(),
       birthday: updated.birthday?.toISOString() ?? null,
+      createdAt: updated.createdAt.toISOString(),
+      lastLoginAt: updated.lastLoginAt?.toISOString() ?? null,
     },
   });
 }

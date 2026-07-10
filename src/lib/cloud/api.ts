@@ -119,22 +119,22 @@ export const api = {
   async uploadFiles(
     files: File[],
     parentId: string | null,
-    onProgress?: (pct: number, fileName?: string) => void
+    onProgress?: (pct: number, fileName?: string) => void,
+    signal?: AbortSignal
   ): Promise<{ created: FileItem[]; usedBytes: string }> {
     const created: FileItem[] = [];
     let lastUsedBytes = "0";
 
     for (const file of files) {
+      if (signal?.aborted) throw new DOMException("Загрузка отменена", "AbortError");
       if (file.size >= CHUNK_THRESHOLD) {
         const result = await uploadChunked(file, parentId, (pct) =>
-          onProgress?.(pct, file.name)
-        );
+          onProgress?.(pct, file.name), signal);
         created.push(result.file);
         lastUsedBytes = result.usedBytes;
       } else {
         const result = await uploadSingle(file, parentId, (pct) =>
-          onProgress?.(pct, file.name)
-        );
+          onProgress?.(pct, file.name), signal);
         created.push(...result.created);
         lastUsedBytes = result.usedBytes;
       }
@@ -453,7 +453,8 @@ const MAX_CHUNK_RETRIES = 3;
 async function uploadSingle(
   file: File,
   parentId: string | null,
-  onProgress?: (pct: number) => void
+  onProgress?: (pct: number) => void,
+  signal?: AbortSignal
 ): Promise<{ created: FileItem[]; usedBytes: string }> {
   return new Promise((resolve, reject) => {
     const form = new FormData();
@@ -480,6 +481,14 @@ async function uploadSingle(
       }
     };
     xhr.onerror = () => reject(new Error("Сеть недоступна"));
+    xhr.onabort = () => reject(new DOMException("Загрузка отменена", "AbortError"));
+    if (signal) {
+      if (signal.aborted) {
+        reject(new DOMException("Загрузка отменена", "AbortError"));
+        return;
+      }
+      signal.addEventListener("abort", () => xhr.abort(), { once: true });
+    }
     xhr.send(form);
   });
 }
@@ -500,19 +509,28 @@ async function uploadSingle(
 async function uploadChunked(
   file: File,
   parentId: string | null,
-  onProgress?: (pct: number) => void
+  onProgress?: (pct: number) => void,
+  signal?: AbortSignal
 ): Promise<{ file: FileItem; usedBytes: string }> {
   const uploadId = (await import("nanoid")).nanoid(16);
   const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
   const parentParam = parentId ? `?parentId=${encodeURIComponent(parentId)}` : "";
 
   for (let i = 0; i < totalChunks; i++) {
+    if (signal?.aborted) {
+      await api.abortUpload(uploadId).catch(() => undefined);
+      throw new DOMException("Загрузка отменена", "AbortError");
+    }
     const start = i * CHUNK_SIZE;
     const end = Math.min(start + CHUNK_SIZE, file.size);
     const chunk = file.slice(start, end);
 
     let lastErr: Error | null = null;
     for (let attempt = 0; attempt < MAX_CHUNK_RETRIES; attempt++) {
+      if (signal?.aborted) {
+        await api.abortUpload(uploadId).catch(() => undefined);
+        throw new DOMException("Загрузка отменена", "AbortError");
+      }
       try {
         const res = await fetch(`/api/files/upload-chunk${parentParam}`, {
           method: "POST",
@@ -526,6 +544,7 @@ async function uploadChunked(
             "X-Chunk-Total": String(totalChunks),
           },
           body: chunk,
+          signal,
         });
 
         if (!res.ok) {
@@ -545,6 +564,11 @@ async function uploadChunked(
         }
         break; // success, move to next chunk
       } catch (err) {
+        // AbortError from user cancellation — propagate immediately.
+        if (err instanceof DOMException && err.name === "AbortError") {
+          await api.abortUpload(uploadId).catch(() => undefined);
+          throw err;
+        }
         lastErr = err instanceof Error ? err : new Error(String(err));
         // Brief backoff before retry.
         await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));

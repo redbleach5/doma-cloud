@@ -362,14 +362,25 @@ describe("POST /api/share/[token] (verify share)", () => {
     expect(share?.usedCount).toBe(2);
   });
 
-  it("deletes the share after one-time-use verification", async () => {
+  it("blocks a second verification after one-time-use (share NOT deleted, usedCount=maxViews=1)", async () => {
+    // The previous implementation deleted the share on first verify, which
+    // broke the download route (it would 403 because the share was gone
+    // before the download stream started). The fix: keep the share row,
+    // treat oneTimeUse as maxViews=1, and use the same atomic conditional
+    // UPDATE on usedCount. A second verify should return 410.
     await db.share.update({
       where: { token: shareToken },
       data: { oneTimeUse: true },
     });
-    await callRoute(verifyShare, { method: "POST", params: { token: shareToken }, body: {} });
+    const r1 = await callRoute(verifyShare, { method: "POST", params: { token: shareToken }, body: {} });
+    expect(r1.response.status).toBe(200);
+    // Share row still exists so download can stream the file.
     const share = await db.share.findUnique({ where: { token: shareToken } });
-    expect(share).toBeNull();
+    expect(share).not.toBeNull();
+    expect(share?.usedCount).toBe(1);
+    // Second verify should be blocked (usedCount >= effectiveMaxViews=1).
+    const r2 = await callRoute(verifyShare, { method: "POST", params: { token: shareToken }, body: {} });
+    expect(r2.response.status).toBe(410);
   });
 
   it("sets a verified-password cookie after successful password verification", async () => {
@@ -551,7 +562,13 @@ describe("GET /api/files/download/[id]", () => {
     expect(data!.needsPassword).toBe(true);
   });
 
-  it("downloads with the correct password via ?sharePassword=", async () => {
+  it("rejects ?sharePassword= in the URL (removed for security — use the verify-cookie flow)", async () => {
+    // We removed ?sharePassword= from the download route because:
+    //   1. It leaked into access logs / browser history / referrers.
+    //   2. It was brute-forceable at the download rate limit of 200/min
+    //      (10× faster than the verify endpoint's 20/min limit).
+    // The share page must call POST /api/share/[token] first, which sets
+    // a doma_sv_<hash> cookie that the download route accepts.
     const pwHash = await hashPassword("secret123");
     await db.share.update({
       where: { token: shareToken },
@@ -562,7 +579,7 @@ describe("GET /api/files/download/[id]", () => {
       url: `http://localhost:3000/api/files/download/${fileId}?token=${shareToken}&sharePassword=secret123`,
       params: { id: fileId },
     });
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(401); // password cookie not set → 401
   });
 
   it("supports Range requests (206 Partial Content)", async () => {

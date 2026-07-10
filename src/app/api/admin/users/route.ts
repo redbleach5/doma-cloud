@@ -5,6 +5,7 @@ import { hashPassword } from "@/lib/auth/session";
 import { getSetting } from "@/lib/cloud/settings";
 import { isUsernameTaken } from "@/lib/auth/users";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 
 export async function GET() {
   const guard = await requireAdmin();
@@ -80,15 +81,26 @@ export async function POST(req: NextRequest) {
       : await getSetting("defaultQuotaBytes");
 
   const passwordHash = await hashPassword(password);
-  const user = await db.user.create({
-    data: {
-      username,
-      displayName: displayName?.trim() || username,
-      passwordHash,
-      role: finalRole,
-      quotaBytes: finalQuota,
-    },
-  });
+  let user;
+  try {
+    user = await db.user.create({
+      data: {
+        username,
+        displayName: displayName?.trim() || username,
+        passwordHash,
+        role: finalRole,
+        quotaBytes: finalQuota,
+      },
+    });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      return NextResponse.json(
+        { error: "Имя пользователя уже занято" },
+        { status: 409 }
+      );
+    }
+    throw err;
+  }
 
   return NextResponse.json({
     user: {
@@ -97,6 +109,10 @@ export async function POST(req: NextRequest) {
       displayName: user.displayName,
       role: user.role,
       quotaBytes: user.quotaBytes.toString(),
+      usedBytes: user.usedBytes.toString(),
+      birthday: user.birthday?.toISOString() ?? null,
+      createdAt: user.createdAt.toISOString(),
+      lastLoginAt: user.lastLoginAt?.toISOString() ?? null,
     },
   });
 }
