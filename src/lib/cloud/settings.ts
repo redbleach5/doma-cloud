@@ -16,6 +16,12 @@ export const DEFAULTS = {
   registrationOpen: true as boolean,
   /** Trash auto-purge age in days. 0 = never auto-purge. */
   trashRetentionDays: 30 as number,
+  /**
+   * Admin-configured local storage root. When non-null, overrides the
+   * STORAGE_LOCAL_ROOT env var at runtime. Used by the admin dashboard
+   * to switch between disks without editing .env. Null = use env default.
+   */
+  storageLocalRoot: null as string | null,
 } as const;
 
 export type SettingKey = keyof typeof DEFAULTS;
@@ -46,6 +52,9 @@ export async function getAllSettings() {
     trashRetentionDays: map.has("trashRetentionDays")
       ? parseInt(map.get("trashRetentionDays")!, 10)
       : DEFAULTS.trashRetentionDays,
+    storageLocalRoot: map.has("storageLocalRoot")
+      ? (map.get("storageLocalRoot") === "" ? null : map.get("storageLocalRoot")!)
+      : DEFAULTS.storageLocalRoot,
   };
 }
 
@@ -62,6 +71,10 @@ export async function setSetting<K extends SettingKey>(
 }
 
 function serialize<K extends SettingKey>(key: K, value: typeof DEFAULTS[K]): string {
+  // null/undefined → empty string marker. Without this, String(null) === "null"
+  // and deserialize would return the string "null" (which is truthy and gets
+  // used as a real path — see getLocalStorageRoot).
+  if (value === null || value === undefined) return "";
   if (typeof value === "bigint") return value.toString();
   if (typeof value === "boolean") return value ? "true" : "false";
   return String(value);
@@ -69,6 +82,8 @@ function serialize<K extends SettingKey>(key: K, value: typeof DEFAULTS[K]): str
 
 function deserialize<K extends SettingKey>(key: K, raw: string): unknown {
   const sample = DEFAULTS[key];
+  // If the default is null (string | null type), empty string means null.
+  if (sample === null) return raw === "" ? null : raw;
   if (typeof sample === "bigint") return BigInt(raw);
   if (typeof sample === "boolean") return raw === "true";
   if (typeof sample === "number") return parseInt(raw, 10);

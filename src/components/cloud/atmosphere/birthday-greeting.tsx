@@ -101,7 +101,7 @@ export function BirthdayGreeting({ user }: Props) {
     <>
       <div
         aria-hidden
-        className="pointer-events-none fixed bottom-0 right-0 -z-5 w-96 h-96 rounded-full"
+        className="pointer-events-none fixed bottom-0 right-0 -z-10 w-96 h-96 rounded-full"
         style={{
           background:
             "radial-gradient(circle at 70% 80%, rgba(255, 180, 100, 0.15), transparent 60%)",
@@ -109,7 +109,7 @@ export function BirthdayGreeting({ user }: Props) {
         }}
       />
 
-      <div className="fixed bottom-4 right-4 z-50 max-w-xs animate-in slide-in-from-bottom-4 duration-500">
+      <div className="fixed bottom-20 right-4 z-40 max-w-xs animate-in slide-in-from-bottom-4 duration-500">
         <div className="relative rounded-2xl border border-primary/30 bg-card/95 backdrop-blur-md p-4 shadow-2xl shadow-primary/20">
           <div className="flex items-start gap-3">
             <div

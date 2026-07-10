@@ -129,7 +129,7 @@ export async function GET(
     return NextResponse.json({ error: "Это папка" }, { status: 400 });
   }
 
-  const storage = getStorage();
+  const storage = await getStorage();
   const stat = await storage.stat(node.storageKey);
 
   // NOTE: share-session cookies (doma_sv_<hash>) are set by POST /api/share/[token],

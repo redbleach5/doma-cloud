@@ -20,9 +20,12 @@ export function CloudApp({ needsSetup, initialUser }: Props) {
   const [user, setUser] = React.useState<CurrentUser | null>(initialUser);
   const [setupNeeded, setSetupNeeded] = React.useState(needsSetup);
 
-  // Register SW for PWA.
+  // Register SW for PWA — but ONLY in production. In dev, the SW's
+  // cache-first policy on static assets breaks Turbopack HMR (the browser
+  // serves stale JS chunks from the SW cache instead of fetching the
+  // freshly-compiled ones, so code changes don't appear).
   React.useEffect(() => {
-    if ("serviceWorker" in navigator) {
+    if (process.env.NODE_ENV === "production" && "serviceWorker" in navigator) {
       navigator.serviceWorker.register("/sw.js").catch(() => undefined);
     }
   }, []);
@@ -74,7 +77,9 @@ export function CloudApp({ needsSetup, initialUser }: Props) {
         {/* Birthday greeting (only renders on the user's special day) */}
         <BirthdayGreeting user={user} />
 
-        <div className="fixed bottom-3 right-3 z-50">
+        {/* Theme toggle — sits above the upload overlay so it stays clickable
+            even when an upload is in progress. */}
+        <div className="fixed bottom-3 right-3 z-30">
           <ThemeToggle />
         </div>
       </div>

@@ -6,7 +6,11 @@ import { ChevronRight, Home } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export function Breadcrumbs() {
-  const { path, popTo, view } = useCloudStore();
+  // Individual selectors — see cloud-sidebar.tsx for why this matters
+  // in zustand v5 (stale closure avoidance).
+  const path = useCloudStore((s) => s.path);
+  const popTo = useCloudStore((s) => s.popTo);
+  const view = useCloudStore((s) => s.view);
 
   if (view === "trash") {
     return (

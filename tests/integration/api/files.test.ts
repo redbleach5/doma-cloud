@@ -482,7 +482,7 @@ describe("DELETE /api/files/[id] (soft delete) + PATCH (restore)", () => {
       storageKey: "alice/key1/f.txt",
     });
     // Write a real storage object so purgeSubtree can delete it.
-    const storage = (await import("@/lib/storage")).getStorage();
+    const storage = await (await import("@/lib/storage")).getStorage();
     await storage.put("alice/key1/f.txt", Buffer.from("data"));
 
     const { response, data } = await callRoute<{ ok: boolean; usedBytes: string }>(deleteFile, {

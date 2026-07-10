@@ -34,11 +34,16 @@ export function FileGrid({ items, view, onOpen, onContext, onLongPress }: Props)
 
 function FileCard({ item, view, onOpen, onContext, onLongPress }: Omit<Props, "items"> & { item: FileItem }) {
   const longPressTimer = React.useRef<number | null>(null);
+  const longPressFiredRef = React.useRef(false);
   const [breathing, setBreathing] = React.useState(false);
 
   const startLongPress = (e: React.TouchEvent) => {
     if (view === "files") {
-      longPressTimer.current = window.setTimeout(() => onLongPress(item, e), 500);
+      longPressFiredRef.current = false;
+      longPressTimer.current = window.setTimeout(() => {
+        longPressFiredRef.current = true;
+        onLongPress(item, e);
+      }, 500);
     }
   };
   const cancelLongPress = () => {
@@ -48,12 +53,24 @@ function FileCard({ item, view, onOpen, onContext, onLongPress }: Omit<Props, "i
     }
   };
 
+  // If a long-press fired, suppress the subsequent click (the browser
+  // synthesizes a click after touchend even after a long-press, which
+  // would otherwise navigate into the folder the user just opened the
+  // context menu for).
+  const handleClick = () => {
+    if (longPressFiredRef.current) {
+      longPressFiredRef.current = false;
+      return;
+    }
+    onOpen(item);
+  };
+
   const isImage = item.category === "image";
   const thumbUrl = isImage && view === "files" ? `/api/files/download/${item.id}` : null;
 
   return (
     <button
-      onClick={() => onOpen(item)}
+      onClick={handleClick}
       onContextMenu={(e) => onContext(e, item)}
       onTouchStart={startLongPress}
       onTouchMove={cancelLongPress}

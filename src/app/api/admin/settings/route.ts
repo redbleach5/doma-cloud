@@ -15,6 +15,7 @@ export async function GET() {
       adminQuotaBytes: settings.adminQuotaBytes.toString(),
       registrationOpen: settings.registrationOpen,
       trashRetentionDays: settings.trashRetentionDays,
+      storageLocalRoot: settings.storageLocalRoot,
     },
   });
 }
@@ -68,6 +69,7 @@ export async function PATCH(req: NextRequest) {
       adminQuotaBytes: settings.adminQuotaBytes.toString(),
       registrationOpen: settings.registrationOpen,
       trashRetentionDays: settings.trashRetentionDays,
+      storageLocalRoot: settings.storageLocalRoot,
     },
   });
 }

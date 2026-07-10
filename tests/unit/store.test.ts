@@ -91,10 +91,10 @@ describe("useCloudStore (Zustand store)", () => {
       expect(useCloudStore.getState().path).toEqual([{ id: null, name: "Дом" }]);
     });
 
-    it("does NOT change view or layout", () => {
+    it("resets view to files but preserves layout", () => {
       useCloudStore.setState({ view: "trash", layout: "list" });
       useCloudStore.getState().reset();
-      expect(useCloudStore.getState().view).toBe("trash");
+      expect(useCloudStore.getState().view).toBe("files");
       expect(useCloudStore.getState().layout).toBe("list");
     });
   });

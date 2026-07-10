@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getSession } from "@/lib/auth/session";
-import { getStorage, buildStorageKey } from "@/lib/storage";
+import { getStorage, buildStorageKey, LocalFileStorage } from "@/lib/storage";
 import { sanitizeName } from "@/lib/cloud/tree";
 import { guessMime } from "@/lib/cloud/mime";
 import { rateLimit, LIMITS } from "@/lib/auth/rate-limit";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
-import path from "node:path";
 
 /**
  * Streaming multipart upload endpoint.
@@ -114,9 +113,9 @@ export async function POST(req: NextRequest) {
   }
 
   // Disk space pre-check (local storage only — S3/MinIO has its own quotas).
-  const storage = getStorage();
-  if (process.env.STORAGE_DRIVER !== "s3") {
-    const root = process.env.STORAGE_LOCAL_ROOT ?? path.join(process.cwd(), "storage-data");
+  const storage = await getStorage();
+  if (process.env.STORAGE_DRIVER !== "s3" && storage instanceof LocalFileStorage) {
+    const root = storage.getRoot();
     try {
       const stat = await fs.statfs(root);
       const freeBytes = stat.bsize * stat.bavail;

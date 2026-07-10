@@ -45,6 +45,11 @@ export interface StorageBackend {
 export class LocalFileStorage implements StorageBackend {
   constructor(private readonly root: string) {}
 
+  /** The absolute filesystem path files are written to. */
+  getRoot(): string {
+    return this.root;
+  }
+
   private resolve(key: string): string {
     // Prevent path traversal: only allow keys under root.
     const resolved = path.resolve(this.root, key);
@@ -74,24 +79,28 @@ export class LocalFileStorage implements StorageBackend {
       const nodeStream = (data as ReadableStream<Uint8Array>).getReader
         ? Readable.fromWeb(data as ReadableStream<Uint8Array>)
         : (data as Readable);
+      // Track size + hash via a Transform that taps the stream without
+      // consuming it. Using .on('data') + .pipe() together is unreliable
+      // (can drop chunks or hang under backpressure).
+      const { Transform } = await import("node:stream");
+      const tap = new Transform({
+        transform(chunk, _enc, cb) {
+          hash.update(chunk);
+          sizeBytes += chunk.byteLength;
+          cb(null, chunk);
+        },
+      });
       const sink = await fs.open(target, "w");
       const writeStream = sink.createWriteStream();
       try {
-        await new Promise<void>((resolve, reject) => {
-          nodeStream.on("data", (chunk: Buffer) => {
-            hash.update(chunk);
-            sizeBytes += chunk.byteLength;
-          });
-          nodeStream.pipe(writeStream);
-          nodeStream.on("error", reject);
-          writeStream.on("error", reject);
-          writeStream.on("finish", resolve);
-        });
+        const { pipeline } = await import("node:stream/promises");
+        await pipeline(nodeStream, tap, writeStream);
       } catch (err) {
         // Stream failed mid-write (network drop, disk full, etc).
         // Close the file handle and delete the partial file so it doesn't
         // waste disk space or appear as a corrupt upload.
         writeStream.destroy();
+        tap.destroy();
         await sink.close().catch(() => undefined);
         await fs.unlink(target).catch(() => undefined);
         throw err;
@@ -130,8 +139,42 @@ export class LocalFileStorage implements StorageBackend {
 // ---------------------------------------------------------------------------
 
 let cached: StorageBackend | null = null;
+let cachedRoot: string | null = null;
 
-export function getStorage(): StorageBackend {
+/**
+ * Return the effective local storage root.
+ *
+ * Priority:
+ *   1. Admin-configured `storageLocalRoot` setting (from DB) — set via
+ *      the admin dashboard. Lets the admin switch disks live.
+ *   2. STORAGE_LOCAL_ROOT env var — set at deploy time.
+ *   3. <cwd>/storage-data — fallback default.
+ *
+ * This function is async because reading the DB setting requires awaiting
+ * Prisma. Callers should cache the result if they call it in a hot path.
+ */
+export async function getLocalStorageRoot(): Promise<string> {
+  // Check DB setting first (admin override).
+  try {
+    const { getSetting } = await import("@/lib/cloud/settings");
+    const override = await getSetting("storageLocalRoot");
+    if (override) return override;
+  } catch {
+    // DB not available yet (e.g. during initial setup) — fall through.
+  }
+  return process.env.STORAGE_LOCAL_ROOT ?? path.join(process.cwd(), "storage-data");
+}
+
+/**
+ * Return the current local storage root WITHOUT touching the DB.
+ * Used for synchronous contexts (logging, display in error messages).
+ * May return null if the async DB-backed resolver hasn't been called yet.
+ */
+export function getCachedLocalStorageRoot(): string | null {
+  return cachedRoot ?? process.env.STORAGE_LOCAL_ROOT ?? null;
+}
+
+export async function getStorage(): Promise<StorageBackend> {
   if (cached) return cached;
   const driver = process.env.STORAGE_DRIVER ?? "local";
   if (driver === "s3") {
@@ -147,19 +190,21 @@ export function getStorage(): StorageBackend {
       forcePathStyle: true,
     });
   } else {
-    const root = process.env.STORAGE_LOCAL_ROOT ?? path.join(process.cwd(), "storage-data");
+    const root = await getLocalStorageRoot();
+    cachedRoot = root;
     cached = new LocalFileStorage(root);
   }
   return cached;
 }
 
 /**
- * Reset the cached storage backend. Primarily for tests that need to
- * point STORAGE_LOCAL_ROOT at a fresh temp directory between scenarios.
- * Safe to call at runtime — the next `getStorage()` re-creates the backend.
+ * Reset the cached storage backend. Call this after changing the
+ * `storageLocalRoot` setting so the next `getStorage()` picks up the
+ * new path.
  */
 export function resetStorageCache(): void {
   cached = null;
+  cachedRoot = null;
 }
 
 /** Build a content-addressed storage key. Format: <ownerId>/<fileId>/<safeName> */

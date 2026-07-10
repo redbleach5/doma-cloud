@@ -63,7 +63,7 @@ export async function POST(req: NextRequest) {
     select: { id: true, ownerId: true, storageKey: true, isDirectory: true, name: true },
   });
 
-  const storage = getStorage();
+  const storage = await getStorage();
   let purgedFiles = 0;
   let purgedDirs = 0;
   let freedBytes = 0n;

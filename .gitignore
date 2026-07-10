@@ -52,3 +52,10 @@ prisma/test.db-shm
 prisma/test.db-wal
 storage-data-test/
 tsconfig.test.tsbuildinfo
+storage-data/
+storage-test/
+prisma/dev.db
+prisma/dev.db-journal
+prisma/test.db
+dev.log
+server.log

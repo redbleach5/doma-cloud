@@ -41,11 +41,16 @@ export function FileList({ items, view, onOpen, onContext, onLongPress }: Props)
 
 function FileRow({ item, view, onOpen, onContext, onLongPress }: Omit<Props, "items"> & { item: FileItem }) {
   const longPressTimer = React.useRef<number | null>(null);
+  const longPressFiredRef = React.useRef(false);
   const [breathing, setBreathing] = React.useState(false);
 
   const startLongPress = (e: React.TouchEvent) => {
     if (view === "files") {
-      longPressTimer.current = window.setTimeout(() => onLongPress(item, e), 500);
+      longPressFiredRef.current = false;
+      longPressTimer.current = window.setTimeout(() => {
+        longPressFiredRef.current = true;
+        onLongPress(item, e);
+      }, 500);
     }
   };
   const cancelLongPress = () => {
@@ -55,12 +60,22 @@ function FileRow({ item, view, onOpen, onContext, onLongPress }: Omit<Props, "it
     }
   };
 
+  // If a long-press fired, suppress the subsequent synthetic click so
+  // we don't navigate into a folder the user just long-pressed.
+  const handleClick = () => {
+    if (longPressFiredRef.current) {
+      longPressFiredRef.current = false;
+      return;
+    }
+    onOpen(item);
+  };
+
   const isImage = item.category === "image";
   const thumbUrl = isImage && view === "files" ? `/api/files/download/${item.id}` : null;
 
   return (
     <button
-      onClick={() => onOpen(item)}
+      onClick={handleClick}
       onContextMenu={(e) => onContext(e, item)}
       onTouchStart={startLongPress}
       onTouchMove={cancelLongPress}

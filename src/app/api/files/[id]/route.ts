@@ -39,7 +39,7 @@ export async function DELETE(
   }
 
   if (hard) {
-    const storage = getStorage();
+    const storage = await getStorage();
     await purgeSubtree(session.sub, id, storage);
     // Hard delete purges bytes that were already soft-deleted, so the
     // `usedBytes` counter (which excludes soft-deleted files) doesn't

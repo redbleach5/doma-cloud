@@ -2,7 +2,6 @@
 
 import * as React from "react";
 import { UploadCloud } from "lucide-react";
-import { cn } from "@/lib/utils";
 
 interface Props {
   onFilesDropped: (files: File[], x: number, y: number) => void;
@@ -50,6 +49,25 @@ export function UploadDropzone({ onFilesDropped, disabled, children }: Props) {
       onFilesDropped(files, e.clientX, e.clientY);
     }
   };
+
+  // Block the browser's default behavior of opening a dropped file when
+  // the drop lands outside the dropzone (e.g. on the header or sidebar).
+  // We attach this to the outer wrapper via onDragOver/onDrop as well.
+  const onWindowDragOver = React.useCallback((e: DragEvent) => {
+    e.preventDefault();
+  }, []);
+  const onWindowDrop = React.useCallback((e: DragEvent) => {
+    e.preventDefault();
+  }, []);
+
+  React.useEffect(() => {
+    window.addEventListener("dragover", onWindowDragOver);
+    window.addEventListener("drop", onWindowDrop);
+    return () => {
+      window.removeEventListener("dragover", onWindowDragOver);
+      window.removeEventListener("drop", onWindowDrop);
+    };
+  }, [onWindowDragOver, onWindowDrop]);
 
   return (
     <div

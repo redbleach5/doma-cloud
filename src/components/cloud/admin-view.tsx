@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { api, type CurrentUser, type AdminUser, type SystemSettings } from "@/lib/cloud/api";
+import { api, type CurrentUser, type AdminUser, type SystemSettings, type StorageStatus, type DiskInfo } from "@/lib/cloud/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,6 +20,7 @@ import { toast } from "sonner";
 import {
   Users, BarChart3, Settings as SettingsIcon, Shield, Plus, Edit2,
   KeyRound, Trash2, Loader2, HardDrive, Activity, Crown, Save,
+  Database, FolderCheck, AlertTriangle, RefreshCw, CheckCircle2,
 } from "lucide-react";
 import { formatBytes } from "@/lib/cloud/format";
 
@@ -40,7 +41,7 @@ export function AdminView({ currentUser }: Props) {
       </p>
 
       <Tabs defaultValue="users">
-        <TabsList className="grid w-full grid-cols-3 max-w-md">
+        <TabsList className="grid w-full grid-cols-4 max-w-md">
           <TabsTrigger value="users" className="gap-1.5">
             <Users className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">Пользователи</span>
@@ -48,6 +49,10 @@ export function AdminView({ currentUser }: Props) {
           <TabsTrigger value="stats" className="gap-1.5">
             <BarChart3 className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">Статистика</span>
+          </TabsTrigger>
+          <TabsTrigger value="storage" className="gap-1.5">
+            <HardDrive className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Диски</span>
           </TabsTrigger>
           <TabsTrigger value="settings" className="gap-1.5">
             <SettingsIcon className="h-3.5 w-3.5" />
@@ -60,6 +65,9 @@ export function AdminView({ currentUser }: Props) {
         </TabsContent>
         <TabsContent value="stats" className="mt-4">
           <StatsTab />
+        </TabsContent>
+        <TabsContent value="storage" className="mt-4">
+          <StorageTab />
         </TabsContent>
         <TabsContent value="settings" className="mt-4">
           <SystemSettingsTab />
@@ -621,6 +629,379 @@ function StatRow({ label, value }: { label: string; value: string }) {
     <div className="flex items-center justify-between text-sm">
       <span className="text-muted-foreground">{label}</span>
       <span className="font-medium tabular-nums">{value}</span>
+    </div>
+  );
+}
+
+// ============= Storage Tab =============
+
+function StorageTab() {
+  const qc = useQueryClient();
+  const { data, isLoading, refetch, isFetching } = useQuery({
+    queryKey: ["admin", "storage"],
+    queryFn: () => api.adminGetStorage(),
+  });
+
+  const [customPath, setCustomPath] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
+  const [confirmSwitch, setConfirmSwitch] = React.useState<{ path: string; isCustom: boolean } | null>(null);
+
+  React.useEffect(() => {
+    if (data?.dbConfiguredRoot) {
+      setCustomPath(data.dbConfiguredRoot);
+    } else if (data?.localRoot) {
+      setCustomPath(data.localRoot);
+    }
+  }, [data]);
+
+  const applyRoot = async (path: string | null) => {
+    setSaving(true);
+    try {
+      await api.adminSetStorageRoot(path);
+      await qc.invalidateQueries({ queryKey: ["admin", "storage"] });
+      await qc.invalidateQueries({ queryKey: ["admin", "stats"] });
+      toast.success(path ? "Хранилище переключено" : "Путь сброшен к env-умолчанию");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Не удалось изменить путь");
+    } finally {
+      setSaving(false);
+      setConfirmSwitch(null);
+    }
+  };
+
+  const onPickPath = (path: string) => {
+    if (!data) return;
+    // If the picked path is already the active root, no-op.
+    if (path === data.localRoot) {
+      toast.info("Этот путь уже активен");
+      return;
+    }
+    setConfirmSwitch({ path, isCustom: false });
+  };
+
+  const onApplyCustom = () => {
+    const trimmed = customPath.trim();
+    if (!trimmed) {
+      toast.error("Введите путь");
+      return;
+    }
+    if (trimmed === data?.localRoot) {
+      toast.info("Этот путь уже активен");
+      return;
+    }
+    setConfirmSwitch({ path: trimmed, isCustom: true });
+  };
+
+  if (isLoading || !data) {
+    return (
+      <div className="flex items-center justify-center h-48 text-muted-foreground">
+        <Loader2 className="h-5 w-5 animate-spin mr-2" />
+        Загрузка информации о дисках…
+      </div>
+    );
+  }
+
+  const usedPct = data.localRootTotalBytes
+    ? (data.localRootUsedBytes ?? 0) / Math.max(1, data.localRootTotalBytes) * 100
+    : 0;
+  const freePct = data.localRootTotalBytes
+    ? (data.localRootFreeBytes ?? 0) / Math.max(1, data.localRootTotalBytes) * 100
+    : 0;
+
+  return (
+    <div className="space-y-4">
+      {/* Active storage card */}
+      <Card className={data.localRootOk ? "border-border/40" : "border-destructive/40"}>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Database className="h-5 w-5 text-primary" />
+              <CardTitle className="text-lg">Активное хранилище</CardTitle>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => refetch()}
+              disabled={isFetching}
+            >
+              {isFetching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              Обновить
+            </Button>
+          </div>
+          <CardDescription>
+            {data.driver === "s3"
+              ? "Файлы хранятся в S3-совместимом объектном хранилище"
+              : "Файлы хранятся в локальной файловой системе"}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {data.driver === "local" && (
+            <>
+              <div className="rounded-lg bg-muted/30 p-3 space-y-1.5">
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="text-muted-foreground">Путь:</span>
+                  <code className="font-mono text-xs break-all flex-1">{data.localRoot}</code>
+                </div>
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-muted-foreground">Источник:</span>
+                  {data.dbConfiguredRoot ? (
+                    <Badge variant="secondary" className="gap-1 text-[10px] py-0 px-1.5">
+                      <Database className="h-2.5 w-2.5" />
+                      Настройка админа
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-[10px] py-0 px-1.5">
+                      .env (STORAGE_LOCAL_ROOT)
+                    </Badge>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 text-xs">
+                  {data.localRootOk ? (
+                    <Badge className="gap-1 text-[10px] py-0 px-1.5 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400">
+                      <FolderCheck className="h-2.5 w-2.5" />
+                      Доступен для записи
+                    </Badge>
+                  ) : (
+                    <Badge className="gap-1 text-[10px] py-0 px-1.5 bg-destructive/15 text-destructive">
+                      <AlertTriangle className="h-2.5 w-2.5" />
+                      Недоступен
+                    </Badge>
+                  )}
+                </div>
+              </div>
+
+              {data.localRootOk && data.localRootTotalBytes != null && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span>Занято на диске</span>
+                    <span className="tabular-nums">
+                      {formatBytes(data.localRootUsedBytes ?? 0)} из {formatBytes(data.localRootTotalBytes)}
+                    </span>
+                  </div>
+                  <div className="h-2.5 rounded-full bg-muted overflow-hidden relative">
+                    {/* Used by Doma (amber) on top of total used (muted) */}
+                    <div
+                      className="absolute inset-y-0 left-0 bg-muted-foreground/30"
+                      style={{ width: `${Math.min(100, 100 - freePct)}%` }}
+                    />
+                    <div
+                      className="absolute inset-y-0 left-0 bg-primary"
+                      style={{ width: `${Math.min(100, usedPct)}%` }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                    <span>Doma: {formatBytes(data.localRootUsedBytes ?? 0)}</span>
+                    <span>Свободно: {formatBytes(data.localRootFreeBytes ?? 0)}</span>
+                  </div>
+                </div>
+              )}
+
+              {!data.localRootOk && (
+                <div className="rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm flex items-start gap-2">
+                  <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+                  <div className="text-destructive">
+                    Директория хранилища недоступна. Загрузка файлов не будет работать.
+                    Выберите доступный диск ниже или укажите путь вручную.
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {data.driver === "s3" && data.s3 && (
+            <div className="rounded-lg bg-muted/30 p-3 space-y-1.5 text-sm">
+              <div className="flex justify-between"><span className="text-muted-foreground">Endpoint</span><code className="font-mono text-xs">{data.s3.endpoint}</code></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Bucket</span><code className="font-mono text-xs">{data.s3.bucket}</code></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Region</span><code className="font-mono text-xs">{data.s3.region}</code></div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Custom path input */}
+      {data.driver === "local" && (
+        <Card className="border-border/40">
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <FolderCheck className="h-5 w-5 text-primary" />
+              <CardTitle className="text-lg">Указать путь вручную</CardTitle>
+            </div>
+            <CardDescription>
+              Введите абсолютный путь к директории. Если она не существует — будет создана.
+              Системные директории (/, /etc, /usr) запрещены.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex gap-2">
+              <Input
+                value={customPath}
+                onChange={(e) => setCustomPath(e.target.value)}
+                placeholder="/mnt/raid/doma-storage"
+                className="h-11 font-mono text-sm"
+              />
+              <Button onClick={onApplyCustom} disabled={saving} className="gap-1.5 shrink-0">
+                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                Применить
+              </Button>
+            </div>
+            {data.dbConfiguredRoot && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => applyRoot(null)}
+                disabled={saving}
+                className="gap-1.5"
+              >
+                Сбросить к .env-умолчанию
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Available disks */}
+      {data.driver === "local" && (
+        <Card className="border-border/40">
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <HardDrive className="h-5 w-5 text-primary" />
+              <CardTitle className="text-lg">Доступные диски</CardTitle>
+            </div>
+            <CardDescription>
+              Смонтированные файловые системы, которые можно использовать под хранилище.
+              Нажмите «Выбрать», чтобы переключиться.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {data.mounts.length === 0 ? (
+              <div className="text-sm text-muted-foreground py-6 text-center">
+                Не удалось получить список дисков.
+                {!data.supportsStatfs && " statfs недоступен на этой платформе."}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {data.mounts.map((disk) => (
+                  <DiskRow
+                    key={disk.mount}
+                    disk={disk}
+                    isActive={disk.mount === data.localRoot || disk.mount === data.dbConfiguredRoot}
+                    onPick={() => onPickPath(disk.mount)}
+                    disabled={saving}
+                  />
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Switch confirmation dialog */}
+      {confirmSwitch && (
+        <Dialog open onOpenChange={(o) => !o && setConfirmSwitch(null)}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5 text-amber-500" />
+                Переключить хранилище?
+              </DialogTitle>
+              <DialogDescription>
+                Новый путь: <code className="font-mono text-xs">{confirmSwitch.path}</code>
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3 text-sm">
+              <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-3 text-amber-900 dark:text-amber-200">
+                <div className="font-medium mb-1">Внимание!</div>
+                <ul className="text-xs space-y-1 list-disc list-inside">
+                  <li>Существующие файлы <strong>не переносятся</strong> автоматически.</li>
+                  <li>Новые загрузки пойдут в новую директорию.</li>
+                  <li>Старые файлы останутся доступными, пока не будет переключён root.</li>
+                  <li>Чтобы перенести файлы — скопируйте их вручную: <code className="font-mono">cp -r &lt;старый&gt;/* &lt;новый&gt;/</code></li>
+                </ul>
+              </div>
+              <p className="text-muted-foreground text-xs">
+                Рекомендуется сначала скопировать файлы в новую директорию, затем переключить путь.
+              </p>
+            </div>
+            <div className="flex gap-2 justify-end">
+              <Button variant="outline" onClick={() => setConfirmSwitch(null)}>
+                Отмена
+              </Button>
+              <Button onClick={() => applyRoot(confirmSwitch.path)} disabled={saving} className="gap-1.5">
+                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                Переключить
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+    </div>
+  );
+}
+
+function DiskRow({
+  disk, isActive, onPick, disabled,
+}: {
+  disk: DiskInfo;
+  isActive: boolean;
+  onPick: () => void;
+  disabled?: boolean;
+}) {
+  const usedPct = disk.totalBytes > 0 ? (disk.usedBytes / disk.totalBytes) * 100 : 0;
+  const isRoot = disk.mount === "/";
+  const isPseudo = ["overlay", "tmpfs"].includes(disk.fsType) || disk.device.startsWith("overlay");
+
+  return (
+    <div className={`flex items-center gap-3 p-3 rounded-lg border transition-colors ${
+      isActive ? "border-primary bg-primary/5" : "border-border/40 hover:bg-muted/30"
+    }`}>
+      <div className="h-10 w-10 rounded-lg bg-muted/60 flex items-center justify-center shrink-0">
+        <HardDrive className="h-5 w-5 text-muted-foreground" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <code className="font-mono text-sm font-medium truncate">{disk.mount}</code>
+          {isActive && (
+            <Badge className="gap-1 text-[10px] py-0 px-1.5 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400">
+              <CheckCircle2 className="h-2.5 w-2.5" />
+              Активен
+            </Badge>
+          )}
+          {isRoot && (
+            <Badge variant="outline" className="text-[10px] py-0 px-1.5">
+              Корень системы
+            </Badge>
+          )}
+          {isPseudo && (
+            <Badge variant="outline" className="text-[10px] py-0 px-1.5 text-muted-foreground">
+              {disk.fsType}
+            </Badge>
+          )}
+        </div>
+        <div className="text-[11px] text-muted-foreground mt-0.5 truncate">
+          {disk.device} · {disk.fsType}
+        </div>
+        <div className="mt-1.5 flex items-center gap-2">
+          <div className="h-1 flex-1 max-w-40 rounded-full bg-muted overflow-hidden">
+            <div
+              className={`h-full rounded-full ${usedPct > 90 ? "bg-destructive" : "bg-primary"}`}
+              style={{ width: `${Math.min(100, usedPct)}%` }}
+            />
+          </div>
+          <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">
+            {formatBytes(disk.freeBytes)} своб. / {formatBytes(disk.totalBytes)}
+          </span>
+        </div>
+      </div>
+      <Button
+        size="sm"
+        variant={isActive ? "ghost" : "secondary"}
+        onClick={onPick}
+        disabled={disabled || isActive}
+        className="shrink-0"
+      >
+        {isActive ? "Активен" : "Выбрать"}
+      </Button>
     </div>
   );
 }

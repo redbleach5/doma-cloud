@@ -41,31 +41,48 @@ export function FileContextMenu(props: Props) {
   } = props;
   const menuRef = React.useRef<HTMLDivElement>(null);
 
-  // Close on outside left-click, scroll, or Escape.
+  // Keep onClose in a ref so the document listeners don't need to be
+  // re-attached on every render (which could race with click events
+  // and "eat" clicks on buttons that happened to fire right as the
+  // menu was closing).
+  const onCloseRef = React.useRef(onClose);
   React.useEffect(() => {
-    const close = () => onClose();
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
+  // Close on outside pointerdown, scroll, or Escape.
+  // We use pointerdown (not click) so the menu closes before the click
+  // reaches another button — but we ONLY close if the pointer is outside
+  // the menu. The click on the other button still fires normally.
+  React.useEffect(() => {
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0) return;
       const el = menuRef.current;
       if (el && e.target instanceof Node && el.contains(e.target)) return;
-      close();
+      // Defer the close to the next tick so the pointerdown doesn't
+      // race with the subsequent click event on another button.
+      // Without this, the menu unmounts synchronously and the click
+      // target may be invalidated.
+      requestAnimationFrame(() => onCloseRef.current());
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") close();
+      if (e.key === "Escape") onCloseRef.current();
     };
 
-    // Capture phase so we run before other handlers; menu uses stopPropagation.
+    const onScroll = () => {
+      onCloseRef.current();
+    };
+
     document.addEventListener("pointerdown", onPointerDown, true);
-    window.addEventListener("scroll", close, true);
+    window.addEventListener("scroll", onScroll, true);
     window.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown, true);
-      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [onClose]);
+  }, []);
 
   const handleRename = async () => {
     onClose();
@@ -152,10 +169,10 @@ export function FileContextMenu(props: Props) {
     <div
       ref={menuRef}
       role="menu"
-      className="fixed z-50 min-w-48 rounded-lg border border-border bg-popover p-1 shadow-xl animate-in fade-in-0 zoom-in-95"
+      className="fixed z-50 min-w-48 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-popover p-1 shadow-xl animate-in fade-in-0 zoom-in-95"
       style={{
-        left: Math.min(x, window.innerWidth - 220),
-        top: Math.min(y, window.innerHeight - 280),
+        left: Math.max(8, Math.min(x, window.innerWidth - 220)),
+        top: Math.max(8, Math.min(y, window.innerHeight - 320)),
       }}
       onContextMenu={(e) => e.preventDefault()}
     >

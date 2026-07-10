@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getSession } from "@/lib/auth/session";
-import { getStorage, buildStorageKey } from "@/lib/storage";
+import { getStorage, buildStorageKey, getCachedLocalStorageRoot, LocalFileStorage } from "@/lib/storage";
 import { sanitizeName } from "@/lib/cloud/tree";
 import { guessMime } from "@/lib/cloud/mime";
 import { rateLimit, LIMITS } from "@/lib/auth/rate-limit";
@@ -175,7 +175,7 @@ export async function POST(req: NextRequest) {
 
   // Write this chunk to its own temp storage key: .uploads/<user>/<uploadId>/chunk-<index>
   // We use the storage abstraction so both Local and S3 backends work.
-  const storage = getStorage();
+  const storage = await getStorage();
   const chunkKey = `${UPLOAD_TEMP_PREFIX}/${session.sub}/${meta.uploadId}/chunk-${meta.chunkIndex}`;
   const chunkStream = req.body;
 
@@ -355,7 +355,7 @@ export async function DELETE(req: NextRequest) {
   // Best-effort cleanup of any chunks we already received for this upload.
   // We don't know chunkTotal here, so we probe chunk indices until we hit a
   // missing one (storage.get throws) — at most MAX_CHUNK_PROBE attempts.
-  const storage = getStorage();
+  const storage = await getStorage();
   for (let i = 0; i < MAX_CHUNK_PROBE; i++) {
     const ck = `${UPLOAD_TEMP_PREFIX}/${session.sub}/${uploadId}/chunk-${i}`;
     try {
@@ -408,7 +408,9 @@ const UPLOAD_TEMP_PREFIX = ".uploads";
  * storage abstraction, not on the local FS directly.
  */
 function uploadTempRoot(userId: string): string {
-  const root = process.env.STORAGE_LOCAL_ROOT ?? path.join(process.cwd(), "storage-data");
+  // Prefer the DB-configured root (set via admin dashboard). Fall back to
+  // env var, then to <cwd>/storage-data. This must match getLocalStorageRoot().
+  const root = getCachedLocalStorageRoot() ?? path.join(process.cwd(), "storage-data");
   return path.join(root, ".uploads", userId);
 }
 

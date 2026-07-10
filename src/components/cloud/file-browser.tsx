@@ -31,7 +31,13 @@ interface Props {
 
 export function FileBrowser({ user, onLogout, onUserUpdated }: Props) {
   const qc = useQueryClient();
-  const { view, layout, path, setUploadVisible, pushFolder } = useCloudStore();
+  // Individual selectors — see cloud-sidebar.tsx for why this matters
+  // in zustand v5 (stale closure avoidance).
+  const view = useCloudStore((s) => s.view);
+  const layout = useCloudStore((s) => s.layout);
+  const path = useCloudStore((s) => s.path);
+  const setUploadVisible = useCloudStore((s) => s.setUploadVisible);
+  const pushFolder = useCloudStore((s) => s.pushFolder);
   const currentFolderId = path[path.length - 1]?.id ?? null;
 
   // File input ref for "Upload" button.
@@ -46,9 +52,8 @@ export function FileBrowser({ user, onLogout, onUserUpdated }: Props) {
   } | null>(null);
 
   // List query.
-  const listKey = ["files", currentFolderId, view];
-  const { data, isLoading, refetch } = useQuery({
-    queryKey: listKey,
+  const { data, isLoading } = useQuery({
+    queryKey: ["files", currentFolderId, view],
     queryFn: () =>
       view === "trash"
         ? api.listFiles(null, { trashed: true })
@@ -62,33 +67,41 @@ export function FileBrowser({ user, onLogout, onUserUpdated }: Props) {
     qc.invalidateQueries({ queryKey: ["me"] });
   }, [qc]);
 
-  const handleUploadClick = () => fileInputRef.current?.click();
+  const handleUploadClick = React.useCallback(() => {
+    // Never trigger the file picker while in trash/settings/admin views —
+    // uploads only make sense inside a real folder.
+    if (view === "trash" || view === "settings" || view === "admin") return;
+    fileInputRef.current?.click();
+  }, [view]);
 
-  const handleFilesSelected = (files: FileList | File[], originX?: number, originY?: number) => {
-    const arr = Array.from(files);
-    if (arr.length === 0) return;
-    // Fire the droplet burst from the drop point — pure delight moment.
-    if (originX !== undefined && originY !== undefined) {
-      fireDropBurst(originX, originY, Math.min(20, 8 + arr.length * 2));
-    }
-    setPendingFiles(arr);
-    setUploadVisible(true);
-  };
+  const handleFilesSelected = React.useCallback(
+    (files: FileList | File[], originX?: number, originY?: number) => {
+      const arr = Array.from(files);
+      if (arr.length === 0) return;
+      // Fire the droplet burst from the drop point — pure delight moment.
+      if (originX !== undefined && originY !== undefined) {
+        fireDropBurst(originX, originY, Math.min(20, 8 + arr.length * 2));
+      }
+      setPendingFiles(arr);
+      setUploadVisible(true);
+    },
+    [setUploadVisible]
+  );
 
-  const handleUploadDone = () => {
+  const handleUploadDone = React.useCallback(() => {
     setPendingFiles([]);
     setUploadVisible(false);
     refresh();
     if (fileInputRef.current) fileInputRef.current.value = "";
-  };
+  }, [refresh, setUploadVisible]);
 
-  const handleUploadCancel = () => {
+  const handleUploadCancel = React.useCallback(() => {
     setPendingFiles([]);
     setUploadVisible(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
-  };
+  }, [setUploadVisible]);
 
-  const handleMkdir = async () => {
+  const handleMkdir = React.useCallback(async () => {
     const name = window.prompt("Имя новой папки:");
     if (!name?.trim()) return;
     try {
@@ -98,30 +111,33 @@ export function FileBrowser({ user, onLogout, onUserUpdated }: Props) {
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Не удалось создать папку");
     }
-  };
+  }, [view, currentFolderId, refresh]);
 
   // Open item — folder → navigate; file → preview.
-  const openItem = (item: FileItem) => {
-    if (view === "trash") return; // No navigation in trash
-    if (item.isDirectory) {
-      pushFolder(item.id, item.name);
-    } else {
-      setPreviewItem(item);
-    }
-  };
+  const openItem = React.useCallback(
+    (item: FileItem) => {
+      if (view === "trash") return; // No navigation in trash
+      if (item.isDirectory) {
+        pushFolder(item.id, item.name);
+      } else {
+        setPreviewItem(item);
+      }
+    },
+    [view, pushFolder]
+  );
 
   // Context menu triggers.
-  const onItemContextMenu = (e: React.MouseEvent, item: FileItem) => {
+  const onItemContextMenu = React.useCallback((e: React.MouseEvent, item: FileItem) => {
     e.preventDefault();
     setContextMenu({ item, x: e.clientX, y: e.clientY });
-  };
+  }, []);
 
-  const onItemLongPress = (item: FileItem, e: React.TouchEvent) => {
+  const onItemLongPress = React.useCallback((item: FileItem, e: React.TouchEvent) => {
     const touch = e.touches[0] ?? (e.changedTouches[0] as Touch);
     if (touch) {
       setContextMenu({ item, x: touch.clientX, y: touch.clientY });
     }
-  };
+  }, []);
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -270,7 +286,8 @@ export function FileBrowser({ user, onLogout, onUserUpdated }: Props) {
 }
 
 function LayoutToggle() {
-  const { layout, setLayout } = useCloudStore();
+  const layout = useCloudStore((s) => s.layout);
+  const setLayout = useCloudStore((s) => s.setLayout);
   return (
     <div className="flex items-center gap-0.5 bg-muted/60 rounded-lg p-0.5">
       <Button

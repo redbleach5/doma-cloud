@@ -25,7 +25,7 @@ export async function makeTempStorage(): Promise<{
   tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "doma-test-storage-"));
   process.env.STORAGE_LOCAL_ROOT = tempRoot;
   resetStorageCache();
-  const storage = getStorage() as LocalFileStorage;
+  const storage = (await getStorage()) as LocalFileStorage;
   return { root: tempRoot, storage };
 }
 

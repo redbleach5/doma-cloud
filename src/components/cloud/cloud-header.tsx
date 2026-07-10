@@ -34,7 +34,9 @@ interface Props {
 }
 
 export function CloudHeader({ user, onLogout, onUploadClick }: Props) {
-  const { setView, view } = useCloudStore();
+  // Individual selectors — see cloud-sidebar.tsx for why this matters.
+  const view = useCloudStore((s) => s.view);
+  const setView = useCloudStore((s) => s.setView);
   const qc = useQueryClient();
   const [mobileOpen, setMobileOpen] = React.useState(false);
 

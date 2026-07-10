@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth/require-admin";
+import { getLocalStorageRoot } from "@/lib/storage";
 import { promises as fs } from "node:fs";
-import path from "node:path";
 
 /** GET — system-wide statistics for the admin dashboard. */
 export async function GET() {
@@ -40,7 +40,7 @@ export async function GET() {
   // Disk space (local storage only)
   let diskInfo: { total?: number; free?: number; used?: number } = {};
   try {
-    const root = process.env.STORAGE_LOCAL_ROOT ?? path.join(process.cwd(), "storage-data");
+    const root = await getLocalStorageRoot();
     const stat = await fs.statfs(root);
     const total = stat.blocks * stat.bsize;
     const free = stat.bavail * stat.bsize;

@@ -29,20 +29,21 @@ export const useCloudStore = create<CloudState>((set) => ({
     set((s) => ({ path: [...s.path, { id, name }] })),
   popTo: (index) =>
     set((s) => ({ path: s.path.slice(0, index + 1) })),
-  reset: () => set({ path: [{ id: null, name: "Дом" }] }),
+  reset: () => set({ path: [{ id: null, name: "Дом" }], view: "files" }),
 
   view: "files",
-  setView: (v) =>
-    set({
-      view: v,
-      // Only reset path when switching to files/trash views.
-      path:
-        v === "files"
-          ? [{ id: null, name: "Дом" }]
-          : v === "trash"
-            ? [{ id: null, name: "Корзина" }]
-            : [{ id: null, name: v === "settings" ? "Настройки" : "Админ-панель" }],
-    }),
+  setView: (v) => {
+    // Compute the new path based on the target view, then set both atomically.
+    const newPath =
+      v === "files"
+        ? [{ id: null, name: "Дом" }]
+        : v === "trash"
+          ? [{ id: null, name: "Корзина" }]
+          : v === "settings"
+            ? [{ id: null, name: "Настройки" }]
+            : [{ id: null, name: "Админ-панель" }];
+    set({ view: v, path: newPath });
+  },
 
   layout: "grid",
   setLayout: (l) => set({ layout: l }),

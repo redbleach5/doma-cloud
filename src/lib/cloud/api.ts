@@ -331,6 +331,25 @@ export const api = {
     });
     return jsonOrThrow(res);
   },
+
+  // ---- Admin: storage ----
+
+  async adminGetStorage(skipUsed = false): Promise<StorageStatus> {
+    const url = skipUsed ? "/api/admin/storage?skipUsed=1" : "/api/admin/storage";
+    const res = await fetch(url, { cache: "no-store" });
+    return jsonOrThrow(res);
+  },
+
+  async adminSetStorageRoot(
+    storageLocalRoot: string | null
+  ): Promise<{ ok: boolean; storageLocalRoot: string | null }> {
+    const res = await fetch("/api/admin/storage", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ storageLocalRoot }),
+    });
+    return jsonOrThrow(res);
+  },
 };
 
 export interface ProfileUser {
@@ -392,6 +411,30 @@ export interface SystemSettings {
   adminQuotaBytes: string;
   registrationOpen: boolean;
   trashRetentionDays: number;
+  storageLocalRoot: string | null;
+}
+
+export interface DiskInfo {
+  mount: string;
+  device: string;
+  fsType: string;
+  totalBytes: number;
+  usedBytes: number;
+  freeBytes: number;
+}
+
+export interface StorageStatus {
+  driver: string;
+  localRoot: string | null;
+  s3: { endpoint: string | null; bucket: string | null; region: string | null } | null;
+  localRootOk: boolean;
+  localRootFreeBytes: number | null;
+  localRootTotalBytes: number | null;
+  localRootUsedBytes: number | null;
+  mounts: DiskInfo[];
+  supportsStatfs: boolean;
+  dbConfiguredRoot: string | null;
+  envConfiguredRoot: string | null;
 }
 
 // ---------------------------------------------------------------------------

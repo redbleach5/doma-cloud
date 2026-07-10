@@ -425,7 +425,7 @@ describe("GET /api/files/download/[id]", () => {
     user = await seedUser({ username: "alice" });
     token = await makeSessionToken(user);
     // Create a file with actual storage content.
-    const storage = (await import("@/lib/storage")).getStorage();
+    const storage = await (await import("@/lib/storage")).getStorage();
     const storageKey = "alice/file1/download.txt";
     await storage.put(storageKey, Buffer.from("download me"));
     const f = await db.fileNode.create({

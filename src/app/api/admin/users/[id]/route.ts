@@ -106,7 +106,7 @@ export async function DELETE(
   }
 
   // Purge all files from storage, then delete the user (cascade removes FileNode rows).
-  const storage = getStorage();
+  const storage = await getStorage();
   const files = await db.fileNode.findMany({
     where: { ownerId: id, isDirectory: false },
     select: { id: true, storageKey: true },

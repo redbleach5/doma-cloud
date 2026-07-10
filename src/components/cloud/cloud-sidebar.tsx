@@ -23,13 +23,24 @@ export function CloudSidebar({ user, onUploadClick, onNavigate }: Props) {
 }
 
 export function CloudSidebarContent({ user, onUploadClick, onNavigate }: Props) {
-  const { view, setView, reset } = useCloudStore();
+  // IMPORTANT: use individual selectors (not destructuring of the whole
+  // store object). In zustand v5, `const { view } = useCloudStore()`
+  // subscribes to the ENTIRE state object, which means the component
+  // re-renders on every store change AND — more critically — closures
+  // captured in onClick handlers can become stale because the selector
+  // identity changes. Using `useCloudStore((s) => s.view)` subscribes
+  // only to the `view` slice, and `useCloudStore((s) => s.setView)`
+  // returns a stable function reference (zustand guarantees this).
+  const view = useCloudStore((s) => s.view);
+  const setView = useCloudStore((s) => s.setView);
 
-  const go = (target: "files" | "trash" | "settings" | "admin") => {
-    if (target === "files") reset();
-    else setView(target);
-    onNavigate?.();
-  };
+  const go = React.useCallback(
+    (target: "files" | "trash" | "settings" | "admin") => {
+      setView(target);
+      onNavigate?.();
+    },
+    [setView, onNavigate]
+  );
 
   const usedPct =
     Number(user.usedBytes) / Math.max(1, Number(user.quotaBytes)) * 100;
@@ -120,7 +131,7 @@ export function CloudSidebarContent({ user, onUploadClick, onNavigate }: Props) 
   );
 }
 
-function SidebarItem({
+const SidebarItem = React.memo(function SidebarItem({
   icon,
   label,
   active,
@@ -133,6 +144,7 @@ function SidebarItem({
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       className={cn(
         "w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all",
@@ -145,6 +157,6 @@ function SidebarItem({
       {label}
     </button>
   );
-}
+});
 
 void FolderClosed;

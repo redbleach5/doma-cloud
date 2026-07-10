@@ -7,7 +7,6 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Loader2, CheckCircle2, X, UploadCloud, AlertCircle } from "lucide-react";
 import { formatBytes } from "@/lib/cloud/format";
-import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
 interface Props {
@@ -24,25 +23,55 @@ interface UploadState {
 }
 
 export function UploadOverlay({ files, parentId, onDone, onCancel }: Props) {
-  const { uploadVisible, setUploadVisible } = useCloudStore();
+  const uploadVisible = useCloudStore((s) => s.uploadVisible);
   const [states, setStates] = React.useState<Record<string, UploadState>>({});
   const [completedCount, setCompletedCount] = React.useState(0);
+  const [errorCount, setErrorCount] = React.useState(0);
   const startedRef = React.useRef(false);
 
+  // Stable callbacks to avoid re-creating `start` on every parent render.
+  const onDoneRef = React.useRef(onDone);
+  const onCancelRef = React.useRef(onCancel);
+  React.useEffect(() => {
+    onDoneRef.current = onDone;
+    onCancelRef.current = onCancel;
+  }, [onDone, onCancel]);
+
+  // Reset internal state whenever a fresh batch of files arrives.
+  // We detect "fresh batch" by tracking the file signature (name+size list).
+  const filesSignature = React.useMemo(
+    () => files.map((f) => `${f.name}:${f.size}`).join("|"),
+    [files]
+  );
+  const lastSigRef = React.useRef<string>("");
+  React.useEffect(() => {
+    if (filesSignature !== lastSigRef.current) {
+      lastSigRef.current = filesSignature;
+      setStates({});
+      setCompletedCount(0);
+      setErrorCount(0);
+      startedRef.current = false;
+    }
+  }, [filesSignature]);
+
   const start = React.useCallback(async () => {
-    if (files.length === 0) {
-      onDone();
+    const currentFiles = files;
+    if (currentFiles.length === 0) {
+      onDoneRef.current();
       return;
     }
-    setStates((s) => {
-      const next = { ...s };
-      for (const f of files) next[f.name + f.size] = { status: "pending", progress: 0 };
+    setStates(() => {
+      const next: Record<string, UploadState> = {};
+      for (const f of currentFiles) next[f.name + f.size] = { status: "pending", progress: 0 };
       return next;
     });
+    setCompletedCount(0);
+    setErrorCount(0);
 
     let doneCount = 0;
+    let errCount = 0;
     // Upload sequentially to keep quota checks accurate and avoid hammering.
-    for (const file of files) {
+    for (const file of currentFiles) {
       const key = file.name + file.size;
       setStates((s) => ({ ...s, [key]: { status: "uploading", progress: 0 } }));
       try {
@@ -55,14 +84,25 @@ export function UploadOverlay({ files, parentId, onDone, onCancel }: Props) {
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Ошибка загрузки";
         setStates((s) => ({ ...s, [key]: { status: "error", progress: 0, error: msg } }));
+        errCount += 1;
+        setErrorCount(errCount);
         toast.error(`${file.name}: ${msg}`);
       }
     }
 
     if (doneCount > 0) {
-      toast.success(`Загружено файлов: ${doneCount} из ${files.length}`);
+      toast.success(`Загружено файлов: ${doneCount} из ${currentFiles.length}`);
     }
-  }, [files, parentId, onDone]);
+
+    // Auto-close the overlay shortly after a fully successful batch,
+    // so the user isn't forced to click "Готово" and the overlay doesn't
+    // block buttons underneath (especially on mobile).
+    if (errCount === 0 && doneCount === currentFiles.length) {
+      setTimeout(() => {
+        onDoneRef.current();
+      }, 1200);
+    }
+  }, [files, parentId]);
 
   React.useEffect(() => {
     if (uploadVisible && files.length > 0 && !startedRef.current) {
@@ -74,24 +114,25 @@ export function UploadOverlay({ files, parentId, onDone, onCancel }: Props) {
 
   if (!uploadVisible || files.length === 0) return null;
 
-  const allDone = completedCount === files.length;
-  const anyError = Object.values(states).some((s) => s.status === "error");
+  const allDone = completedCount === files.length && errorCount === 0;
+  const anyError = errorCount > 0;
+  const finished = completedCount + errorCount === files.length;
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 w-full max-w-sm animate-in slide-in-from-bottom-4">
+    <div className="fixed bottom-4 right-4 z-40 w-[calc(100vw-2rem)] max-w-sm animate-in slide-in-from-bottom-4">
       <Card className="border-primary/20 shadow-2xl shadow-primary/10 overflow-hidden">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border/60 bg-muted/40">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 min-w-0">
             {allDone ? (
-              <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-            ) : anyError ? (
-              <AlertCircle className="h-5 w-5 text-destructive" />
+              <CheckCircle2 className="h-5 w-5 text-emerald-500 shrink-0" />
+            ) : anyError && finished ? (
+              <AlertCircle className="h-5 w-5 text-destructive shrink-0" />
             ) : (
-              <Loader2 className="h-5 w-5 text-primary animate-spin" />
+              <Loader2 className="h-5 w-5 text-primary animate-spin shrink-0" />
             )}
-            <div>
-              <div className="text-sm font-medium">
-                {allDone ? "Загрузка завершена" : "Загружаем файлы"}
+            <div className="min-w-0">
+              <div className="text-sm font-medium truncate">
+                {allDone ? "Загрузка завершена" : anyError && finished ? "Загрузка с ошибками" : "Загружаем файлы"}
               </div>
               <div className="text-xs text-muted-foreground">
                 {completedCount} / {files.length}
@@ -101,14 +142,14 @@ export function UploadOverlay({ files, parentId, onDone, onCancel }: Props) {
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-1">
-            {allDone && (
+          <div className="flex items-center gap-1 shrink-0">
+            {finished && (
               <Button size="sm" variant="ghost" onClick={onDone} className="h-7">
-                Готово
+                {anyError ? "Закрыть" : "Готово"}
               </Button>
             )}
-            {!allDone && (
-              <Button size="icon" variant="ghost" onClick={onCancel} className="h-7 w-7" aria-label="Скрыть">
+            {!finished && (
+              <Button size="icon" variant="ghost" onClick={onCancel} className="h-7 w-7" aria-label="Отменить">
                 <X className="h-4 w-4" />
               </Button>
             )}
