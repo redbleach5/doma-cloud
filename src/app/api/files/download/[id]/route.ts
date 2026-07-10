@@ -13,7 +13,7 @@ import { rateLimit, getClientIp, LIMITS } from "@/lib/auth/rate-limit";
  *   2. Shared         — ?token=<shareToken> present, file must match the share.
  *
  * Share access enforces ALL protections:
- *   - passwordHash     → requires ?sharePassword=... (verified via bcrypt)
+ *   - passwordHash     → requires share password verify (argon2id); cookie doma_sv_* for Range
  *   - expiresAt        → rejected if past
  *   - maxViews         → rejected if usedCount >= maxViews
  *   - oneTimeUse       → after first successful access, share is deleted

@@ -26,7 +26,7 @@
 | Backend | Next.js API Routes (Route Handlers) |
 | Storage | Локальная FS (по умолчанию) или MinIO/S3 (через переменную окружения) |
 | DB | SQLite + Prisma ORM |
-| Auth | Кастомный JWT в httpOnly cookie (jose + bcryptjs) |
+| Auth | Кастомный JWT в httpOnly cookie (jose + argon2id) |
 | Reverse proxy | Caddy (auto self-signed HTTPS для локалки) |
 | Контейнер | Docker Compose |
 
@@ -74,7 +74,7 @@ sudo usermod -aG docker $USER
 ### 3. Склонируйте проект и настройте
 
 ```bash
-git clone <your-repo-url> doma-cloud
+git clone https://github.com/redbleach5/doma-cloud.git doma-cloud
 cd doma-cloud
 
 # Скопируйте и отредактируйте окружение
@@ -82,6 +82,7 @@ cp .env.example .env
 nano .env
 # Обязательно:
 #   DOMA_JWT_SECRET — сгенерируйте через `openssl rand -base64 48`
+#   CRON_SECRET     — сгенерируйте через `openssl rand -hex 32`
 #   STORAGE_LOCAL_ROOT=/mnt/raid/doma
 #   NEXT_PUBLIC_APP_URL=http://mini-pc.local  (или IP мини-ПК)
 
@@ -99,7 +100,7 @@ docker compose up -d --build
 
 ### 5. Добавьте остальных членов семьи
 
-После входа администратора — на странице входа есть форма регистрации. Каждый может зарегистрироваться сам (по умолчанию 50 ГБ квоты), либо админ может изменить квоту в БД через `sqlite3`.
+После входа администратора — на странице входа есть форма регистрации. Каждый может зарегистрироваться сам (по умолчанию 50 ГБ квоты). Админ может создавать пользователей, менять квоты и роли в админ-панели → Пользователи / Система. Если `usedBytes` разошёлся с реальностью — кнопка «Пересчитать квоты» в Системе.
 
 ### 6. Установите PWA на телефон
 
@@ -246,11 +247,41 @@ docker compose exec doma sh -c 'sqlite3 /app/db/doma.db < /tmp/restore.sql'
 
 - **JWT-секрет** — в production приложение отказывается запускаться без `DOMA_JWT_SECRET` (минимум 32 символа). Сгенерируйте: `openssl rand -base64 48`.
 - **Rate limiting** — login (10/мин), регистрация (5/мин), проверка пароля share (20/мин) на IP. Брутфорс блокируется.
-- **Share-пароли** — проверяются через bcrypt на каждом доступе; cookie `doma_sv_*` (24ч) позволяет media Range-запросам не пересылать пароль.
+- **Share-пароли** — хешируются argon2id; cookie `doma_sv_*` (24ч) позволяет media Range-запросам не пересылать пароль на каждый чанк.
 - **oneTimeUse** — после первого успешного доступа share удаляется.
 - **Счётчик просмотров** — инкрементируется 1 раз за сессию (24ч cookie), не на каждый Range-запрос.
 - **WebDAV** — Basic Auth; для доступа извне используйте HTTPS (Tailscale Funnel или Caddy с Let's Encrypt).
 - **Удаление пользователей** — нельзя удалить последнего админа или самого себя.
+
+> **Миграция с bcrypt:** если переносите старую базу, пароли нужно сбросить — argon2id несовместим с bcrypt-хешами.
+
+## Разработка и тесты
+
+Локальный запуск (без Docker):
+
+```bash
+bun install
+cp .env.example .env   # отредактируйте секреты
+bun run db:generate && bun run db:push
+bun run dev            # http://localhost:3000
+```
+
+Тесты (Bun test runner, **426 тестов**):
+
+```bash
+# один раз: создать тестовую БД (или она создаётся при первом bun run test)
+DATABASE_URL="file:$(pwd)/prisma/test.db" bunx prisma db push --skip-generate
+
+bun run test              # все тесты (каждый файл — отдельный процесс)
+bun run test:unit         # только unit (быстро, без DB)
+bun run test:integration  # DB + API + компоненты
+bun run typecheck         # типчек приложения
+bun run typecheck:test    # типчек тестов
+bun run build             # production build
+```
+
+Подробнее — `tests/README.md`. Не запускайте `bun test` напрямую на всей папке:
+используйте `bun run test` — serial runner изолирует DB, rate-limiter и cookies.
 
 ## Структура проекта
 
@@ -259,8 +290,11 @@ src/
 ├── app/
 │   ├── api/                    # API routes
 │   │   ├── auth/               # /register, /login, /logout
+│   │   ├── admin/              # users, settings, stats, recompute-quotas
+│   │   ├── cron/               # trash-cleanup
 │   │   ├── files/              # /list, /upload, /upload-chunk, /mkdir, /download/[id], /[id]
 │   │   ├── me                  # текущий пользователь
+│   │   ├── profile/            # профиль и смена пароля
 │   │   ├── share/[token]       # публичная проверка ссылки
 │   │   └── setup/status        # нужен ли initial setup
 │   ├── s/[token]/              # публичная страница расшаренного файла
@@ -282,7 +316,11 @@ src/
 │   │   └── ...
 │   └── ui/                     # shadcn/ui компоненты
 └── lib/
-    ├── auth/session.ts         # JWT-сессии
+    ├── auth/
+    │   ├── session.ts          # JWT-сессии
+    │   ├── password.ts         # argon2id hash/verify
+    │   ├── users.ts            # case-insensitive username lookup (SQLite)
+    │   └── rate-limit.ts       # in-memory rate limiter
     ├── cloud/
     │   ├── api.ts              # типизированный клиент API (+ chunked upload)
     │   ├── mime.ts             # категоризация файлов
@@ -302,6 +340,8 @@ docker-compose.yml              # doma + webdav + caddy
 Dockerfile                      # multi-stage standalone build
 Caddyfile.prod                  # роутинг: /dav/* → webdav, /* → doma
 .env.example                    # шаблон конфигурации
+tests/                          # 426 тестов (unit + integration + API)
+bunfig.toml                     # preload для bun test
 ```
 
 ## Дорожная карта
@@ -309,13 +349,15 @@ Caddyfile.prod                  # роутинг: /dav/* → webdav, /* → doma
 - [x] WebDAV-эндпоинт для нативных файловых менеджеров ✅
 - [x] Стриминг загрузок без буферизации в память (chunked upload) ✅
 - [x] Ламповый UI с тёплой атмосферой ✅
+- [x] Квоты через UI администратора (adminQuotaBytes, recompute-quotas) ✅
+- [x] Тестовый набор (426 тестов, Bun) ✅
 - [ ] Автозагрузка фото с камеры (Background Fetch API)
 - [ ] Версии файлов (история изменений)
 - [ ] Полнотекстовый поиск (Meilisearch)
 - [ ] Расшаривание папок (не только файлов)
 - [ ] 2FA для администратора
 - [ ] Поле дня рождения в профиле + именинный режим
-- [ ] Квоты через UI администратора
+- [ ] CI на GitHub (test + build на push)
 
 ## Лицензия
 
