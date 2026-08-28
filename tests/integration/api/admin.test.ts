@@ -72,7 +72,7 @@ describe("GET /api/admin/users", () => {
   });
 
   it("lists all users", async () => {
-    const { admin, token } = await makeAdminAndToken();
+    const { token } = await makeAdminAndToken();
     await seedUser({ username: "bob", role: "user" });
     await seedUser({ username: "carol", role: "user" });
     const { data } = await callRoute<{ users: { id: string; username: string }[] }>(listUsers, {
@@ -289,7 +289,7 @@ describe("DELETE /api/admin/users/[id]", () => {
   });
 
   it("deletes a user and their files", async () => {
-    const { admin, token } = await makeAdminAndToken();
+    const { token } = await makeAdminAndToken();
     const target = await seedUser({ username: "target" });
     await seedFile({ ownerId: target.id, parentId: null, name: "f.txt" });
     const { response, data } = await callRoute<{ ok: boolean; purgedFiles: number }>(deleteUser, {

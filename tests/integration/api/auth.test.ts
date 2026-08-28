@@ -4,7 +4,7 @@ import { POST as register } from "@/app/api/auth/register/route";
 import { POST as logout } from "@/app/api/auth/logout/route";
 import { GET as listFiles } from "@/app/api/files/list/route";
 import { db, resetDb, seedUser, makeSessionToken } from "../../helpers/db";
-import { buildRequest, callRoute } from "../../helpers/mock-request";
+import { callRoute } from "../../helpers/mock-request";
 import {
   resetMockCookies,
   setMockCookies,

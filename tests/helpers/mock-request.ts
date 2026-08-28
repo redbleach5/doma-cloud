@@ -93,7 +93,6 @@ export function buildRequest(opts: BuildRequestOptions = {}): NextRequest {
  * Throws if the response is not ok and `throwOnError` is true (default false).
  */
 export async function callRoute<T = unknown>(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   handler: (req: NextRequest, ctx?: any) => Promise<Response>,
   opts: BuildRequestOptions & { params?: Record<string, string> } = {}
 ): Promise<{ response: Response; data: T | null }> {

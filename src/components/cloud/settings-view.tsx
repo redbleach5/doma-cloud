@@ -64,7 +64,6 @@ export function SettingsView({ user, onUserUpdated, onLogout }: Props) {
     if (profile) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setDisplayName(profile.displayName);
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setBirthday(birthdayDateInputValue(profile.birthday));
     }
   }, [profile]);

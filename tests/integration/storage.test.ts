@@ -1,18 +1,14 @@
 import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { Readable } from "node:stream";
-import { promises as fs } from "node:fs";
-import path from "node:path";
 import { LocalFileStorage } from "@/lib/storage";
 import { makeTempStorage, cleanupTempStorage } from "../helpers/storage";
 
 describe("LocalFileStorage", () => {
   let storage: LocalFileStorage;
-  let root: string;
 
   beforeEach(async () => {
     const ctx = await makeTempStorage();
     storage = ctx.storage;
-    root = ctx.root;
   });
 
   afterEach(async () => {

@@ -191,10 +191,11 @@ function VideoPreview({ url, mimeType }: { url: string; mimeType: string }) {
   // track keeps playing in the background after the user closes the preview
   // dialog (especially on Safari/iOS).
   React.useEffect(() => {
+    const el = ref.current;
     return () => {
-      ref.current?.pause();
-      ref.current?.removeAttribute("src");
-      ref.current?.load();
+      el?.pause();
+      el?.removeAttribute("src");
+      el?.load();
     };
   }, []);
   return (
@@ -215,10 +216,11 @@ function VideoPreview({ url, mimeType }: { url: string; mimeType: string }) {
 function AudioPreview({ url, name, mimeType }: { url: string; name: string; mimeType: string }) {
   const ref = React.useRef<HTMLAudioElement>(null);
   React.useEffect(() => {
+    const el = ref.current;
     return () => {
-      ref.current?.pause();
-      ref.current?.removeAttribute("src");
-      ref.current?.load();
+      el?.pause();
+      el?.removeAttribute("src");
+      el?.load();
     };
   }, []);
   return (

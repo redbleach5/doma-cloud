@@ -84,7 +84,6 @@ export function UploadOverlay({
 
   const entries = React.useMemo<FileEntry[]>(
     () => files.map((file) => ({ file, id: makeFileId() })),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [files]
   );
 

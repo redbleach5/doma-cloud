@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { api, type CurrentUser, type AdminUser, type SystemSettings, type StorageStatus, type DiskInfo } from "@/lib/cloud/api";
+import { api, type CurrentUser, type AdminUser, type SystemSettings, type DiskInfo } from "@/lib/cloud/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -394,7 +394,7 @@ function CreateUserDialog({ onClose, onCreated }: { onClose: () => void; onCreat
   );
 }
 
-function EditUserDialog({ user, isSelf, onClose, onSaved }: { user: AdminUser; isSelf: boolean; onClose: () => void; onSaved: (updated: AdminUser) => void }) {
+function EditUserDialog({ user, isSelf: _isSelf, onClose, onSaved }: { user: AdminUser; isSelf: boolean; onClose: () => void; onSaved: (updated: AdminUser) => void }) {
   const [displayName, setDisplayName] = React.useState(user.displayName);
   const [role, setRole] = React.useState<"admin" | "user">(user.role as "admin" | "user");
   const [quotaGB, setQuotaGB] = React.useState(() => {
@@ -673,7 +673,6 @@ function StorageTab() {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setCustomPath(data.dbConfiguredRoot);
     } else if (data?.localRoot) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCustomPath(data.localRoot);
     }
   }, [data]);
@@ -1080,11 +1079,8 @@ function SystemSettingsTab() {
       const s: SystemSettings = data.settings;
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setDefaultQuotaGB(String(Math.round(Number(s.defaultQuotaBytes) / (1024 * 1024 * 1024))));
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setAdminQuotaGB(String(Math.round(Number(s.adminQuotaBytes) / (1024 * 1024 * 1024))));
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setRegistrationOpen(s.registrationOpen);
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setTrashDays(String(s.trashRetentionDays));
     }
   }, [data]);

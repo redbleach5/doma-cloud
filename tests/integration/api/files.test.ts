@@ -18,7 +18,7 @@ describe("POST /api/files/mkdir", () => {
     await resetDb();
     resetMockCookies();
     __clearRateLimitBucketsForTests();
-    const ctx = await makeTempStorage();
+    await makeTempStorage();
     user = await seedUser({ username: "alice" });
     token = await makeSessionToken(user);
   });
@@ -147,7 +147,7 @@ describe("GET /api/files/list", () => {
     await resetDb();
     resetMockCookies();
     __clearRateLimitBucketsForTests();
-    const ctx = await makeTempStorage();
+    await makeTempStorage();
     user = await seedUser({ username: "alice" });
     token = await makeSessionToken(user);
   });

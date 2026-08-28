@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "bun:test";
-import { POST as createShare, GET as listShares } from "@/app/api/files/[id]/share/route";
+import { GET as listShares } from "@/app/api/files/[id]/share/route";
 import { DELETE as revokeShare } from "@/app/api/files/[id]/share/[token]/route";
 import { POST as verifyShare } from "@/app/api/share/[token]/route";
 import { db, resetDb, seedUser, seedFile, seedShare, makeSessionToken } from "../../helpers/db";

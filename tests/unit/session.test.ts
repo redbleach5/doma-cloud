@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from "bun:test";
+import { describe, expect, it, afterEach } from "bun:test";
 import { signSession, verifySession } from "@/lib/auth/session";
 
 // These tests exercise signSession and verifySession directly, WITHOUT going

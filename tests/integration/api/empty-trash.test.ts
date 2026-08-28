@@ -11,7 +11,8 @@ describe("POST /api/files/empty-trash", () => {
   let user: { id: string; username: string; role: "admin" | "user"; tokenVersion: number };
   let other: { id: string; username: string; role: "admin" | "user"; tokenVersion: number };
   let token: string;
-  let otherToken: string;
+  let _otherToken: string;
+
 
   beforeEach(async () => {
     await resetDb();
@@ -21,7 +22,7 @@ describe("POST /api/files/empty-trash", () => {
     user = await seedUser({ username: "alice" });
     other = await seedUser({ username: "bob" });
     token = await makeSessionToken(user);
-    otherToken = await makeSessionToken(other);
+    _otherToken = await makeSessionToken(other);
   });
 
   afterEach(async () => {

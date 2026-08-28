@@ -255,11 +255,8 @@ describe("tree.ts DB functions", () => {
   });
 
   describe("purgeSubtree", () => {
-    let storage: { delete: (key: string) => Promise<void> };
-
     beforeEach(async () => {
-      const ctx = await makeTempStorage();
-      storage = ctx.storage;
+      await makeTempStorage();
     });
 
     afterEach(async () => {

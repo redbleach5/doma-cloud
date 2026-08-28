@@ -49,7 +49,7 @@ export const useCloudStore = create<CloudState>((set) => ({
   pushFolder: (id, name) =>
     set((s) => ({ path: [...s.path, { id, name }] })),
   pushSharedFolder: (rootFolderId, name, sharedFolderId, permission) =>
-    set((s) => ({ path: [{ id: rootFolderId, name, sharedFolderId, permission }] })),
+    set(() => ({ path: [{ id: rootFolderId, name, sharedFolderId, permission }] })),
   popTo: (index) =>
     set((s) => ({ path: s.path.slice(0, index + 1) })),
   reset: () =>

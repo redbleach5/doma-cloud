@@ -4,7 +4,7 @@ import { POST as verifyShare } from "@/app/api/share/[token]/route";
 import { GET as downloadFile } from "@/app/api/files/download/[id]/route";
 import { db, resetDb, seedUser, seedFile, seedShare, makeSessionToken } from "../../helpers/db";
 import { callRoute } from "../../helpers/mock-request";
-import { resetMockCookies, setMockCookies, getMockCookies } from "../../helpers/mock-cookies";
+import { resetMockCookies } from "../../helpers/mock-cookies";
 import { __clearRateLimitBucketsForTests } from "@/lib/auth/rate-limit";
 import { makeTempStorage, cleanupTempStorage } from "../../helpers/storage";
 import { hashPassword } from "@/lib/auth/password";
@@ -494,7 +494,7 @@ describe("GET /api/files/download/[id]", () => {
     await resetDb();
     resetMockCookies();
     __clearRateLimitBucketsForTests();
-    const ctx = await makeTempStorage();
+    await makeTempStorage();
     user = await seedUser({ username: "alice" });
     token = await makeSessionToken(user);
     // Create a file with actual storage content.

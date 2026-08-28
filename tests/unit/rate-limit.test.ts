@@ -1,9 +1,8 @@
-import { describe, expect, it, beforeEach } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import {
   rateLimit,
   getClientIp,
   LIMITS,
-  type RateLimitResult,
 } from "@/lib/auth/rate-limit";
 
 // The rate limiter uses an in-memory Map. State persists across tests in the

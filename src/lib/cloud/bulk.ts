@@ -4,7 +4,7 @@
 export async function runBulkActions(
   ids: string[],
   action: (id: string) => Promise<unknown>,
-  labels: { successOne: string; successMany: (n: number) => string; fail: string }
+  _labels: { successOne: string; successMany: (n: number) => string; fail: string }
 ): Promise<{ ok: number; fail: number }> {
   let ok = 0;
   let fail = 0;

@@ -163,7 +163,6 @@ describe("simulation — shared file restore + revoke", () => {
 describe("simulation — shared folder upload + mkdir", () => {
   let owner: { id: string; username: string; role: "admin" | "user"; tokenVersion: number };
   let recipient: { id: string; username: string; role: "admin" | "user"; tokenVersion: number };
-  let ownerToken: string;
   let recipientToken: string;
   let folder: { id: string };
   let share: { id: string; nodeId: string };
@@ -175,7 +174,6 @@ describe("simulation — shared folder upload + mkdir", () => {
     await makeTempStorage();
     owner = await seedUser({ username: "alice", usedBytes: 0n });
     recipient = await seedUser({ username: "bob" });
-    ownerToken = await makeSessionToken(owner);
     recipientToken = await makeSessionToken(recipient);
     folder = await seedFile({
       ownerId: owner.id,

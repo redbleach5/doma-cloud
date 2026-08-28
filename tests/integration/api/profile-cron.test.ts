@@ -7,7 +7,7 @@ import { callRoute } from "../../helpers/mock-request";
 import { resetMockCookies, getMockCookie } from "../../helpers/mock-cookies";
 import { __clearRateLimitBucketsForTests } from "@/lib/auth/rate-limit";
 import { makeTempStorage, cleanupTempStorage } from "../../helpers/storage";
-import { verifyPassword, hashPassword } from "@/lib/auth/password";
+import { verifyPassword } from "@/lib/auth/password";
 
 describe("GET /api/profile", () => {
   beforeEach(async () => {
