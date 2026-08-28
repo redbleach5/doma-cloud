@@ -106,7 +106,7 @@ export async function POST(req: NextRequest) {
     }
   })();
 
-  const webStream = Readable.toWeb(passthrough) as ReadableStream;
+  const webStream = Readable.toWeb(passthrough) as unknown as ReadableStream;
   const stamp = new Date().toISOString().slice(0, 10);
 
   return new NextResponse(webStream, {
