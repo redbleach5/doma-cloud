@@ -1,0 +1,56 @@
+{
+  "name": "Наша история — семейный архив дома",
+  "short_name": "История",
+  "description": "Семейный архив для фото, видео и документов. Храните близкое дома.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fdf8ef",
+  "theme_color": "#fdf8ef",
+  "orientation": "any",
+  "lang": "ru",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Загрузить файл",
+      "short_name": "Загрузить",
+      "url": "/?action=upload"
+    },
+    {
+      "name": "Корзина",
+      "short_name": "Корзина",
+      "url": "/?view=trash"
+    }
+  ]
+}

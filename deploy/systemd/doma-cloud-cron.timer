@@ -1,0 +1,12 @@
+[Unit]
+Description=Doma Cloud cleanup three times daily
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+OnCalendar=*-*-* 12:00:00
+OnCalendar=*-*-* 20:00:00
+Persistent=true
+Unit=doma-cloud-cron.service
+
+[Install]
+WantedBy=timers.target

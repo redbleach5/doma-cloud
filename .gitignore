@@ -1,0 +1,69 @@
+# Dependencies
+node_modules/
+
+# Build
+.next/
+out/
+dist/
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+prisma/dev.db
+prisma/dev.db-shm
+prisma/dev.db-wal
+
+# Local storage
+storage-data/
+
+# Logs
+*.log
+dev.log
+
+# Archives & patches (local artifacts)
+*.tar.gz
+*.patch
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# TypeScript
+tsconfig.tsbuildinfo
+tsconfig.test.tsbuildinfo
+
+# Tooling artifacts
+eslint-report.json
+
+# Testing
+coverage/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
+# Test artifacts
+prisma/test.db
+prisma/test.db-shm
+prisma/test.db-wal
+storage-data-test/
+tsconfig.test.tsbuildinfo
+storage-data/
+storage-test/
+prisma/dev.db
+prisma/dev.db-journal
+prisma/test.db
+dev.log
+server.log

@@ -1,0 +1,5 @@
+[test]
+preload = ["./tests/preload.ts"]
+coverage = false
+# Time out individual tests after 30s (argon2 hashing is slow).
+timeout = 30000

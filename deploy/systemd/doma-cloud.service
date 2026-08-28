@@ -1,0 +1,21 @@
+[Unit]
+Description=Doma Cloud family file server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+Group=__GROUP__
+WorkingDirectory=__DOMA_ROOT__
+Environment=PATH=__BUN_DIR__:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=__HOME__
+ExecStart=/bin/bash __DOMA_ROOT__/scripts/prod/run-start.sh
+Restart=always
+RestartSec=5
+# Logs also go to server.log via Next; journal still captures stderr.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
