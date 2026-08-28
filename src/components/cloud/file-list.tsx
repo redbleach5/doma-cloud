@@ -32,6 +32,7 @@ export function FileList({
   onLoadMore,
   selectedIds,
   selectionMode,
+  cursorId,
   onItemOpen,
   onItemToggle,
   onItemContext,
@@ -78,6 +79,7 @@ export function FileList({
                 item={item}
                 view={view}
                 selected={selectedIds.has(item.id)}
+                cursor={cursorId === item.id}
                 selectionMode={selectionMode}
                 onOpen={onItemOpen}
                 onToggle={onItemToggle}
@@ -101,6 +103,7 @@ function FileRow({
   item,
   view,
   selected,
+  cursor,
   selectionMode,
   onOpen,
   onToggle,
@@ -110,6 +113,7 @@ function FileRow({
   item: FileItem;
   view: "files" | "trash" | "shared";
   selected: boolean;
+  cursor: boolean;
   selectionMode: boolean;
   onOpen: (item: FileItem, e: React.MouseEvent) => void;
   onToggle: (item: FileItem, e: React.MouseEvent) => void;
@@ -159,6 +163,7 @@ function FileRow({
         "group w-full grid grid-cols-[1fr_auto] sm:grid-cols-[1fr_auto_auto] gap-2 items-center px-4 py-2.5 min-h-11 text-left hover:bg-accent/40 transition-colors doma-warm-glow relative",
         "focus-visible:outline-hidden focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40",
         longPress.highlight && "bg-accent/60 ring-2 ring-inset ring-primary/40",
+        cursor && !selected && "bg-accent/30 ring-2 ring-inset ring-primary/20",
         selected && "bg-primary/5 ring-2 ring-inset ring-primary/40"
       )}
     >

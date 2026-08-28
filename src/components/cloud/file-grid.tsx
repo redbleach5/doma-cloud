@@ -15,6 +15,8 @@ export interface FileViewSelectionProps {
   selectedIds: Set<string>;
   /** When true, checkboxes are always visible (select session). */
   selectionMode: boolean;
+  /** Keyboard-cursor item id (arrow-key navigation highlight). */
+  cursorId?: string;
   onItemOpen: (item: FileItem, e: React.MouseEvent) => void;
   onItemToggle: (item: FileItem, e: React.MouseEvent) => void;
   onItemContext: (e: React.MouseEvent, item: FileItem) => void;
@@ -30,7 +32,7 @@ interface Props extends FileViewSelectionProps {
   onLoadMore?: () => void;
 }
 
-function useGridColumns(width: number): number {
+export function gridColumnsFor(width: number): number {
   if (width >= 1280) return 6;
   if (width >= 1024) return 5;
   if (width >= 768) return 4;
@@ -47,6 +49,7 @@ export function FileGrid({
   onLoadMore,
   selectedIds,
   selectionMode,
+  cursorId,
   onItemOpen,
   onItemToggle,
   onItemContext,
@@ -67,7 +70,7 @@ export function FileGrid({
     return () => ro.disconnect();
   }, []);
 
-  const cols = useGridColumns(width);
+  const cols = gridColumnsFor(width);
   const rowCount = Math.ceil(items.length / cols) || 0;
   const estimateRow = Math.max(160, Math.floor((width - (cols - 1) * 12) / cols) + 56);
 
@@ -113,6 +116,7 @@ export function FileGrid({
                   item={item}
                   view={view}
                   selected={selectedIds.has(item.id)}
+                  cursor={cursorId === item.id}
                   selectionMode={selectionMode}
                   onOpen={onItemOpen}
                   onToggle={onItemToggle}
@@ -135,6 +139,7 @@ function FileCard({
   item,
   view,
   selected,
+  cursor,
   selectionMode,
   onOpen,
   onToggle,
@@ -144,6 +149,7 @@ function FileCard({
   item: FileItem;
   view: "files" | "trash" | "shared";
   selected: boolean;
+  cursor: boolean;
   selectionMode: boolean;
   onOpen: (item: FileItem, e: React.MouseEvent) => void;
   onToggle: (item: FileItem, e: React.MouseEvent) => void;
@@ -194,6 +200,7 @@ function FileCard({
         "hover:bg-accent/40 hover:border-primary/20 transition-all",
         "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/40",
         breathing && "doma-breathe",
+        cursor && !selected && "ring-2 ring-primary/25 bg-accent/30",
         longPress.highlight && "ring-2 ring-primary/50 bg-accent/50",
         selected && "ring-2 ring-primary/60 border-primary/40 bg-primary/5"
       )}

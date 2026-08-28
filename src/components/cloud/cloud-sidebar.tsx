@@ -152,7 +152,9 @@ export function CloudSidebarContent({ user, onNavigate }: Props) {
             />
           </div>
           <div className="flex items-center justify-between text-[11px]">
-            <span className="text-muted-foreground">{formatBytes(user.usedBytes)}</span>
+            <span className="text-muted-foreground">
+              {formatBytes(user.usedBytes)} из {Math.min(100, Math.round(usedPct))}%
+            </span>
             <span className="text-muted-foreground">{formatBytes(user.quotaBytes)}</span>
           </div>
         </div>

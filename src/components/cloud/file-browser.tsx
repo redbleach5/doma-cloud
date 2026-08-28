@@ -6,7 +6,7 @@ import { useCloudStore } from "@/lib/cloud/store";
 import { CloudHeader } from "@/components/cloud/cloud-header";
 import { CloudSidebar } from "@/components/cloud/cloud-sidebar";
 import { Breadcrumbs } from "@/components/cloud/breadcrumbs";
-import { FileGrid } from "@/components/cloud/file-grid";
+import { FileGrid, gridColumnsFor } from "@/components/cloud/file-grid";
 import { FileList } from "@/components/cloud/file-list";
 import { UploadDropzone } from "@/components/cloud/upload-dropzone";
 import { UploadOverlay, fileResumeKey } from "@/components/cloud/upload-overlay";
@@ -100,6 +100,8 @@ export function FileBrowser({ user, onLogout, onUserUpdated }: Props) {
   const [selectionMode, setSelectionMode] = React.useState(false);
   const [selectionAnchorId, setSelectionAnchorId] = React.useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = React.useState(false);
+  // Roving keyboard cursor (arrow-key navigation). -1 = inactive.
+  const [cursorIndex, setCursorIndex] = React.useState(-1);
 
   // ---- Query: list items ----
   //
@@ -391,6 +393,7 @@ export function FileBrowser({ user, onLogout, onUserUpdated }: Props) {
   if (prevNavKey !== navKey) {
     setPrevNavKey(navKey);
     clearSelection();
+    setCursorIndex(-1);
   }
 
   const toggleSelect = React.useCallback((id: string) => {
@@ -423,6 +426,100 @@ export function FileBrowser({ user, onLogout, onUserUpdated }: Props) {
     },
     [items, selectionAnchorId]
   );
+
+  // ---- Keyboard navigation over the file list ----
+  // The scroll container is tabbable; arrows move a roving cursor, Enter opens,
+  // Space toggles selection, Escape resets. In grid layout Up/Down jump a full
+  // row (column count derived from the same breakpoints as FileGrid).
+  const safeCursorIndex =
+    cursorIndex >= 0 && cursorIndex < items.length ? cursorIndex : -1;
+  const cursorId = safeCursorIndex >= 0 ? items[safeCursorIndex]!.id : undefined;
+
+  const handleListKeyDown = React.useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      // Don't hijack keys while a modal / context menu is open (focus lives in
+      // a portal, but a stale focused container could still receive events).
+      if (contextMenu || previewItem || shareItem || moveItems) return;
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (items.length === 0) return;
+
+      const inGrid = layout === "grid";
+      const cols = inGrid
+        ? Math.max(1, gridColumnsFor(scrollRef.current?.clientWidth ?? 800))
+        : 1;
+      const last = items.length - 1;
+      const move = (delta: number) => {
+        e.preventDefault();
+        setCursorIndex((prev) => {
+          const base = prev < 0 ? 0 : prev;
+          return Math.min(last, Math.max(0, base + delta));
+        });
+        // Prefetch next pages when the cursor approaches the loaded tail.
+        loadMore();
+      };
+
+      switch (e.key) {
+        case "ArrowDown":
+          move(inGrid ? cols : 1);
+          break;
+        case "ArrowUp":
+          move(inGrid ? -cols : -1);
+          break;
+        case "ArrowRight":
+          if (inGrid) move(1);
+          break;
+        case "ArrowLeft":
+          if (inGrid) move(-1);
+          break;
+        case "Home":
+          e.preventDefault();
+          setCursorIndex(0);
+          loadMore();
+          break;
+        case "End":
+          e.preventDefault();
+          setCursorIndex(last);
+          loadMore();
+          break;
+        case "Enter": {
+          if (safeCursorIndex < 0) return;
+          e.preventDefault();
+          openItem(items[safeCursorIndex]!);
+          break;
+        }
+        case " ": {
+          if (safeCursorIndex < 0) return;
+          e.preventDefault();
+          toggleSelect(items[safeCursorIndex]!.id);
+          break;
+        }
+        case "Escape":
+          if (selectionMode || selectedIds.size > 0 || safeCursorIndex >= 0) {
+            e.preventDefault();
+            clearSelection();
+            setCursorIndex(-1);
+          }
+          break;
+      }
+    },
+    [
+      items, layout, safeCursorIndex, openItem, toggleSelect, clearSelection,
+      loadMore, scrollRef, contextMenu, previewItem, shareItem, moveItems,
+      selectionMode, selectedIds,
+    ]
+  );
+
+  // Keep the keyboard cursor visible while moving.
+  React.useEffect(() => {
+    if (safeCursorIndex < 0) return;
+    const id = items[safeCursorIndex]?.id;
+    if (!id) return;
+    const el = scrollRef.current?.querySelector<HTMLElement>(
+      `[data-file-item="${CSS.escape(id)}"]`
+    );
+    el?.scrollIntoView({ block: "nearest" });
+  }, [safeCursorIndex, items, scrollRef]);
 
   /** Body click: always open; clear selection chrome if any. */
   const onItemOpen = React.useCallback(
@@ -884,9 +981,12 @@ export function FileBrowser({ user, onLogout, onUserUpdated }: Props) {
           >
             <div
               ref={scrollRef}
-              tabIndex={-1}
+              tabIndex={0}
+              role="listbox"
+              aria-label="Файлы и папки"
+              onKeyDown={handleListKeyDown}
               onClick={onScrollBackgroundClick}
-              className="flex-1 overflow-y-auto p-4 pb-[max(7.5rem,calc(4.5rem+env(safe-area-inset-bottom)))] md:pb-[max(6rem,calc(1.5rem+env(safe-area-inset-bottom)))] outline-none"
+              className="flex-1 overflow-y-auto p-4 pb-[max(7.5rem,calc(4.5rem+env(safe-area-inset-bottom)))] md:pb-[max(6rem,calc(1.5rem+env(safe-area-inset-bottom)))] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/20"
             >
               {isLoading || (isSharedRootList && sharedLoading) ? (
                 layout === "list" ? <FileListSkeleton /> : <FileGridSkeleton />
@@ -916,6 +1016,7 @@ export function FileBrowser({ user, onLogout, onUserUpdated }: Props) {
                   onItemLongPress={onItemLongPress}
                   selectedIds={selectedIds}
                   selectionMode={selectionMode || selectedIds.size > 0}
+                  cursorId={cursorId}
                   scrollRef={scrollRef}
                   hasMore={!!hasNextPage}
                   isFetchingMore={isFetchingNextPage}
@@ -931,6 +1032,7 @@ export function FileBrowser({ user, onLogout, onUserUpdated }: Props) {
                   onItemLongPress={onItemLongPress}
                   selectedIds={selectedIds}
                   selectionMode={selectionMode || selectedIds.size > 0}
+                  cursorId={cursorId}
                   scrollRef={scrollRef}
                   hasMore={!!hasNextPage}
                   isFetchingMore={isFetchingNextPage}
