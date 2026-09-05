@@ -192,7 +192,10 @@ export async function GET(
   let jpeg: Buffer;
   try {
     const source = await storage.getBuffer(node.storageKey);
+    // .rotate() автоматически поворачивает изображение на основе EXIF-ориентации.
+    // Без этого фото, сделанные в портретном режиме, отображались бы повёрнутыми.
     jpeg = await sharp(source, { limitInputPixels: 100_000_000 })
+      .rotate()
       .resize(size, size, { fit: "inside", withoutEnlargement: true })
       .jpeg({ quality: 80, mozjpeg: true })
       .toBuffer();

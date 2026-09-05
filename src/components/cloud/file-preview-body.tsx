@@ -185,8 +185,41 @@ function ImagePreview({
   );
 }
 
+/**
+ * Браузеры могут воспроизводить только определённые видеоформаты.
+ * Эта функция проверяет, поддерживает ли браузер данный MIME-тип.
+ * Для неподдерживаемых форматов показываем сообщение вместо пустого экрана.
+ */
+function isBrowserPlayableVideo(mimeType: string): boolean {
+  // Нормализуем MIME-тип
+  const normalized = (mimeType ?? "").toLowerCase().split(";")[0].trim();
+
+  // Форматы, которые большинство современных браузеров поддерживают
+  const PLAYABLE_VIDEO_TYPES = new Set([
+    "video/mp4",      // H.264/AAC — самый поддерживаемый формат
+    "video/webm",     // VP8/VP9 + Vorbis/Opus
+    "video/ogg",      // Theora + Vorbis
+  ]);
+
+  // Быстрая проверка по известным типам
+  if (PLAYABLE_VIDEO_TYPES.has(normalized)) return true;
+
+  // Для остальных форматов проверяем через API браузера (если доступно)
+  if (typeof document === "undefined") return false;
+
+  const video = document.createElement("video");
+  const canPlay = video.canPlayType(normalized);
+
+  // canPlayType возвращает: "probably", "maybe", или "" (пустая строка = не поддерживается)
+  return canPlay === "probably" || canPlay === "maybe";
+}
+
 function VideoPreview({ url, mimeType }: { url: string; mimeType: string }) {
   const ref = React.useRef<HTMLVideoElement>(null);
+  const [error, setError] = React.useState<string | null>(null);
+
+  const playable = isBrowserPlayableVideo(mimeType);
+
   // Pause the video when the component unmounts. Without this, the audio
   // track keeps playing in the background after the user closes the preview
   // dialog (especially on Safari/iOS).
@@ -198,6 +231,31 @@ function VideoPreview({ url, mimeType }: { url: string; mimeType: string }) {
       el?.load();
     };
   }, []);
+
+  // Если формат не поддерживается браузером, показываем сообщение
+  if (!playable) {
+    return (
+      <div className="flex flex-col items-center gap-4 p-8 text-center" data-testid="video-unsupported">
+        <div className="h-24 w-24 rounded-3xl bg-muted/60 flex items-center justify-center">
+          <AlertTriangle className="h-12 w-12 text-muted-foreground" />
+        </div>
+        <div>
+          <div className="font-medium">Видео не может быть воспроизведено</div>
+          <div className="text-sm text-muted-foreground mt-1">
+            Формат {mimeType} не поддерживается браузером.
+            Скачайте файл для просмотра в плеере.
+          </div>
+        </div>
+        <Button asChild>
+          <a href={url} download>
+            <Download className="h-4 w-4 mr-2" />
+            Скачать
+          </a>
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <video
       ref={ref}
@@ -207,6 +265,11 @@ function VideoPreview({ url, mimeType }: { url: string; mimeType: string }) {
       muted
       className="max-w-full max-h-full rounded-lg shadow-lg bg-black"
       playsInline
+      onError={() => {
+        const videoEl = ref.current;
+        const errorMsg = videoEl?.error?.message || "Не удалось загрузить видео";
+        setError(errorMsg);
+      }}
     >
       <source src={url} type={mimeType} />
     </video>
@@ -364,6 +427,49 @@ function MarkdownPreview({ source }: { source: string }) {
   );
 }
 
+/**
+ * Возвращает подсказку о почему формат не поддерживается
+ * и что можно сделать в качестве альтернативы.
+ */
+function getUnsupportedFormatHint(mimeType: string): string {
+  const lower = (mimeType ?? "").toLowerCase().split(";")[0].trim();
+
+  // Видеоформаты, которые не поддерживаются браузером
+  if (lower.startsWith("video/") && !["video/mp4", "video/webm", "video/ogg"].includes(lower)) {
+    return `Формат ${mimeType} не поддерживается браузером. Скачайте файл для просмотра в видеоплеере (VLC, MPC-HC и т.д.).`;
+  }
+
+  // Аудиоформаты без поддержки
+  if (lower.startsWith("audio/") && !["audio/mpeg", "audio/mp3", "audio/ogg", "audio/wav", "audio/webm", "audio/aac"].includes(lower)) {
+    return `Формат ${mimeType} не поддерживается браузером. Скачайте файл для прослушивания в аудиоплеере.`;
+  }
+
+  // Архивы
+  if (["application/zip", "application/x-rar-compressed", "application/x-7z-compressed", "application/gzip", "application/x-tar"].includes(lower)) {
+    return `Архивы нельзя просмотреть в браузере. Скачайте файл и распакуйте его.`;
+  }
+
+  // Исполняемые файлы
+  if (["application/x-executable", "application/x-msdownload", "application/x-dosexec"].includes(lower)) {
+    return `Исполняемые файлы нельзя открыть в браузере. Скачайте файл для запуска на компьютере.`;
+  }
+
+  // Документы Office (без поддержки просмотра)
+  if ([
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/msword",
+    "application/vnd.ms-excel",
+    "application/vnd.ms-powerpoint",
+  ].includes(lower)) {
+    return `Формат ${mimeType} не поддерживается для просмотра. Скачайте файл для открытия в соответствующей программе.`;
+  }
+
+  // Общий случай
+  return `Этот тип файла нельзя открыть в браузере (${mimeType}). Скачайте файл для просмотра.`;
+}
+
 function UnsupportedPreview({
   name,
   mimeType,
@@ -376,6 +482,10 @@ function UnsupportedPreview({
   hint?: string;
 }) {
   const ext = name.split(".").pop()?.toUpperCase() ?? "FILE";
+
+  // Используем переданную подсказку или генерируем автоматически
+  const displayHint = hint ?? getUnsupportedFormatHint(mimeType);
+
   return (
     <div className="flex flex-col items-center gap-4 p-8 text-center" data-testid="preview-unsupported">
       <div className="h-24 w-24 rounded-3xl bg-muted/60 flex items-center justify-center">
@@ -383,8 +493,8 @@ function UnsupportedPreview({
       </div>
       <div>
         <div className="font-medium">{name}</div>
-        <div className="text-sm text-muted-foreground mt-1">
-          {hint ?? `Этот тип файла нельзя открыть в браузере (${mimeType}).`}
+        <div className="text-sm text-muted-foreground mt-1 max-w-sm">
+          {displayHint}
         </div>
       </div>
       <Button asChild>
