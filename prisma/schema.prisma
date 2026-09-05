@@ -1,0 +1,143 @@
+// Doma Cloud — Prisma schema
+// Family cloud storage with multi-user accounts, sharing, trash, quotas.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String    @id @default(cuid())
+  username       String    @unique
+  displayName    String
+  passwordHash   String
+  role           String    @default("user") // "admin" | "user"
+  quotaBytes     BigInt    @default(0) // Set explicitly on user creation from settings.defaultQuotaBytes (see src/lib/cloud/settings.ts). 0 here is just a placeholder — the application always overrides it.
+  usedBytes      BigInt    @default(0)
+  // Profile
+  birthday       DateTime? // для именинного режима
+  themePreference String?  // "light" | "dark" | "system"
+  // Security — incremented on password change to invalidate old sessions.
+  tokenVersion   Int       @default(0)
+  // Audit
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  lastLoginAt    DateTime?
+
+  files  FileNode[]
+  shares Share[]                          // link-shares created by this user
+  sharedItemsCreated    SharedItem[] @relation("SharedItemOwner")
+  sharedItemsReceived   SharedItem[] @relation("SharedItemRecipient")
+}
+
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model FileNode {
+  id          String    @id @default(cuid())
+  ownerId     String
+  parent      FileNode? @relation("FileTree", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: Cascade)
+  parentId    String?
+  children    FileNode[] @relation("FileTree")
+  name        String    // display name (utf-8)
+  storageKey  String    // unique key in storage (e.g. <ownerId>/<fileId>/<originalName>)
+  isDirectory Boolean   @default(false)
+  sizeBytes   BigInt    @default(0)
+  mimeType    String    @default("application/octet-stream")
+  hashSha256  String?
+  // Trash
+  deletedAt   DateTime?
+  deletedBy   String?
+  // Audit
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  owner  User    @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  shares Share[]
+  // This node can be the root of SharedItem ACL rows (folder OR file).
+  sharedItems SharedItem[]
+
+  @@index([ownerId, parentId])
+  @@index([ownerId, deletedAt])
+  @@index([parentId, deletedAt])
+  @@index([storageKey])
+}
+
+/**
+ * Public link-share — a one-off URL (`/s/<token>`) that grants download
+ * access to a SINGLE file. Optionally protected by a password, expiry,
+ * max-views, or one-time-use flag.
+ *
+ * NOTE: this model is for FILE-only public links. Sharing with specific
+ * user accounts (folders or files) is handled by `SharedItem` below.
+ *
+ * Field renames (vs the original schema):
+ *   - `fileId` → `nodeId`   (the field covers both files and directories at
+ *                            the DB layer; the API currently restricts it
+ *                            to files, but the name shouldn't lie about
+ *                            what the FK points to)
+ *   - `user`    → `creator` (the relation is the user who CREATED the share,
+ *                            not the viewer — the old name was misleading)
+ *   - new field `label`     (optional note, e.g. «для бабушки»)
+ *
+ * One active public link per file is the intended UX (POST upserts).
+ */
+model Share {
+  id           String    @id @default(cuid())
+  nodeId       String
+  token        String    @unique
+  label        String?
+  passwordHash String?
+  expiresAt    DateTime?
+  oneTimeUse   Boolean   @default(false)
+  usedCount    Int       @default(0)
+  maxViews     Int?
+  createdBy    String
+  createdAt    DateTime  @default(now())
+
+  node    FileNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  creator User     @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+
+  @@index([nodeId])
+  @@index([expiresAt])
+  @@index([createdBy])
+}
+
+/**
+ * SharedItem — Google-Drive-style sharing of a folder OR file with a
+ * specific user account.
+ *
+ * Permissions:
+ *   view   — read-only: list (folders) + download / preview
+ *   upload — view + can upload into subfolders (folders only; unused for files)
+ *   edit   — upload + rename / move / delete inside the share
+ *            (recipient CANNOT rename/trash the shared root itself —
+ *            only the owner can)
+ *
+ * Unique constraint: one share per (node, recipient) pair — re-sharing
+ * updates the permission in place.
+ */
+model SharedItem {
+  id          String   @id @default(cuid())
+  nodeId      String
+  ownerId     String
+  recipientId String
+  permission  String   @default("view") // "view" | "upload" | "edit"
+  createdAt   DateTime @default(now())
+
+  node      FileNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  owner     User     @relation("SharedItemOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  recipient User     @relation("SharedItemRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@unique([nodeId, recipientId])
+  @@index([recipientId])
+  @@index([ownerId])
+  @@index([nodeId])
+}

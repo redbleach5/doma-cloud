@@ -1,0 +1,13 @@
+[Unit]
+Description=Doma Cloud cleanup cron (trash/uploads/share)
+After=doma-cloud.service
+Requires=doma-cloud.service
+
+[Service]
+Type=oneshot
+User=__USER__
+Group=__GROUP__
+WorkingDirectory=__DOMA_ROOT__
+Environment=PATH=__BUN_DIR__:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=__HOME__
+ExecStart=/bin/bash __DOMA_ROOT__/scripts/prod/cron-run.sh

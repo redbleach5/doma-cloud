@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Doma Cloud backup at 03:15
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+Unit=doma-cloud-backup.service
+
+[Install]
+WantedBy=timers.target

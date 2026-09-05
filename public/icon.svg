@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#d97f3a"/>
+      <stop offset="100%" stop-color="#a85c2a"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#g)"/>
+  <!-- Cloud shape -->
+  <path fill="#fdf6e9" d="M180 360c-44 0-80-34-80-76 0-38 28-70 65-75 12-44 52-75 100-75 50 0 92 35 102 80 36 6 63 35 63 70 0 42-36 76-80 76H180z"/>
+  <!-- House roof inside cloud -->
+  <path fill="#d97f3a" d="M256 220l-72 56v8h144v-8l-72-56z"/>
+  <rect x="200" y="284" width="112" height="48" rx="6" fill="#d97f3a"/>
+  <rect x="244" y="298" width="24" height="34" fill="#fdf6e9"/>
+</svg>
