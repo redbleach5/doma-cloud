@@ -5,12 +5,12 @@
  *   1. FFMPEG_PATH / FFPROBE_PATH env vars
  *   2. <cwd>/tools/ffmpeg/bin/ffmpeg.exe (+ .exe-less variant)
  *   3. well-known project location (this self-hosted deployment)
- *   4. bare names via PATH
+ *   4. bare names via PATH (verified by actually running `-version`)
  * When nothing is found every helper returns null and the app keeps working
  * exactly as before — ffmpeg is strictly an enhancement, never a dependency
  * of uploads or previews.
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 
@@ -32,6 +32,19 @@ async function exists(p: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Bare-name (PATH) candidates can't be verified with fs.access — run them.
+ * Without this, locateFfmpeg() would report "found" on machines that have no
+ * ffmpeg in PATH at all (e.g. CI): the returned bare name fails only later at
+ * spawn time, so skip-guards like `if (!bins) return` in the video-poster
+ * test never trigger. `-version` exits 0 on every real ffmpeg/ffprobe build
+ * and is cheap; a missing binary surfaces as an ENOENT error / null status.
+ */
+function runsOnPath(bin: string): boolean {
+  const r = spawnSync(bin, ["-version"], { timeout: 5_000, windowsHide: true });
+  return r.status === 0;
 }
 
 export async function locateFfmpeg(): Promise<FfmpegBins | null> {
@@ -58,6 +71,8 @@ export async function locateFfmpeg(): Promise<FfmpegBins | null> {
   for (const c of candidates) {
     if (c.ffmpeg.includes(path.sep) && !(await exists(c.ffmpeg))) continue;
     if (c.ffprobe.includes(path.sep) && !(await exists(c.ffprobe))) continue;
+    if (!c.ffmpeg.includes(path.sep) && !runsOnPath(c.ffmpeg)) continue;
+    if (!c.ffprobe.includes(path.sep) && !runsOnPath(c.ffprobe)) continue;
     cache = { bins: c, at: Date.now() };
     return c;
   }
