@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -53,7 +53,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -72,13 +72,13 @@ jobs:
     name: Integration tests (SQLite + API routes)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      # test:setup (`prisma db push`) reads DATABASE_URL from the environment;
-      # CI has no .env file, so point it at exactly the file tests/preload.ts
-      # overrides DATABASE_URL to (prisma/test.db).
-      DATABASE_URL: file:./prisma/test.db
+    # No DATABASE_URL needed here: `test:setup` computes an absolute path
+    # itself (relative SQLite URLs are resolved against the schema dir —
+    # that mismatch once produced an empty test DB on CI), and
+    # tests/preload.ts overrides DATABASE_URL with the same absolute path
+    # for the tests.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -110,7 +110,7 @@ jobs:
       DOMA_JWT_SECRET: ci-build-secret-0123456789abcdef0123456789abcdef
       DOMA_INSECURE_COOKIE: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: oven-sh/setup-bun@v2
         with:

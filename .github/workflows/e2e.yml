@@ -31,7 +31,7 @@ jobs:
       DOMA_JWT_SECRET: e2e-ci-secret-0123456789abcdef0123456789abcdef
       DOMA_INSECURE_COOKIE: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: oven-sh/setup-bun@v2
         with:
