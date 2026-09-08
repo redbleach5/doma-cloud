@@ -99,6 +99,7 @@ describe("GET /api/files/upload-chunk — resume status", () => {
       nextChunkIndex: number;
       fileName: string;
       fileSize: number;
+      chunkSize: number | null;
     }>(uploadStatus, {
       method: "GET",
       url: `http://localhost:3000/api/files/upload-chunk?uploadId=${uploadId}`,
@@ -110,6 +111,9 @@ describe("GET /api/files/upload-chunk — resume status", () => {
     expect(data!.nextChunkIndex).toBe(1);
     expect(data!.fileName).toBe("big.bin");
     expect(data!.fileSize).toBe(fileSize);
+    // chunk-0 is "AAAA" (4 bytes) — the client needs this to resume a session
+    // with matching offsets after a client-side CHUNK_SIZE change.
+    expect(data!.chunkSize).toBe(part1.length);
 
     // Finish with chunk 1 — should resume cleanly.
     const last = await callRoute<{ finalized: boolean }>(uploadChunk, {

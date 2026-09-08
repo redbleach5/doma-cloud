@@ -241,7 +241,7 @@ function FileCard({
         ) : (
           <FileThumb
             item={item}
-            size={128}
+            size={256}
             enabled={showThumb}
             alt={item.name}
             imgClassName="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"

@@ -42,6 +42,10 @@ interface CloudState {
   /** Request FileBrowser to open a preview (e.g. «Случайное фото»). */
   pendingPreview: FileItem | null;
   setPendingPreview: (item: FileItem | null) => void;
+
+  /** «Установить приложение» guide dialog (install-app-dialog.tsx). */
+  installDialogOpen: boolean;
+  setInstallDialogOpen: (v: boolean) => void;
 }
 
 export const useCloudStore = create<CloudState>((set) => ({
@@ -57,6 +61,7 @@ export const useCloudStore = create<CloudState>((set) => ({
       path: [{ id: null, name: "Дом" }],
       view: "files",
       pendingPreview: null,
+      installDialogOpen: false,
     }),
 
   view: "files",
@@ -85,4 +90,7 @@ export const useCloudStore = create<CloudState>((set) => ({
 
   pendingPreview: null,
   setPendingPreview: (item) => set({ pendingPreview: item }),
+
+  installDialogOpen: false,
+  setInstallDialogOpen: (v) => set({ installDialogOpen: v }),
 }));

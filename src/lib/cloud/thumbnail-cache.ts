@@ -19,9 +19,9 @@ export const THUMB_DIR = ".thumbs";
  * чтобы автоматически инвалидировать все существующие кэши.
  *
  * v1 — initial version
- * v2 — added .rotate() for EXIF orientation support
+ * v3 — added post-resize sharpen + raised JPEG quality (85) + video posters pre-scaled in ffmpeg
  */
-export const THUMB_CACHE_VERSION = 2;
+export const THUMB_CACHE_VERSION = 3;
 
 export function thumbCacheKey(nodeId: string, size: number, updatedAtMs: number): string {
   return `${THUMB_DIR}/v${THUMB_CACHE_VERSION}/${nodeId}/${size}-${updatedAtMs}.jpg`;

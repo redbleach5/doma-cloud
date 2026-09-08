@@ -40,8 +40,9 @@ export function FileThumb({
   const eligible =
     enabled &&
     !item.isDirectory &&
-    item.category === "image" &&
-    isThumbnailableImage(item.mimeType);
+    (item.category === "image"
+      ? isThumbnailableImage(item.mimeType)
+      : item.category === "video");
 
     const [failed, setFailed] = React.useState(false);
   const src = eligible ? api.thumbnailUrl(item.id, size, token) : null;

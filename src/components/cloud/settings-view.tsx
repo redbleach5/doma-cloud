@@ -21,10 +21,14 @@ import {
   Sun,
   Moon,
   Monitor,
+  Download,
+  Smartphone,
 } from "lucide-react";
 import { formatBytes, formatDate } from "@/lib/cloud/format";
 import { birthdayDateInputValue, toBirthdayIso } from "@/lib/cloud/birthday";
 import { BRAND_NAME } from "@/lib/cloud/brand";
+import { useCloudStore } from "@/lib/cloud/store";
+import { isPwaInstalled } from "@/lib/cloud/pwa-install";
 
 interface Props {
   user: CurrentUser;
@@ -39,6 +43,15 @@ export function SettingsView({ user, onUserUpdated, onLogout }: Props) {
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setMounted(true);
+  }, []);
+
+  // «Установить приложение» guide dialog (shared with the phone hint).
+  const setInstallDialogOpen = useCloudStore((s) => s.setInstallDialogOpen);
+  // Installed-state is computed after mount to avoid hydration mismatch.
+  const [appInstalled, setAppInstalled] = React.useState(false);
+  React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAppInstalled(isPwaInstalled());
   }, []);
 
   // Fetch full profile (with birthday, themePreference, etc.)
@@ -270,6 +283,32 @@ export function SettingsView({ user, onUserUpdated, onLogout }: Props) {
           {!mounted && (
             <p className="text-xs text-muted-foreground mt-2">Загрузка текущей темы…</p>
           )}
+        </CardContent>
+      </Card>
+
+      {/* App installation (PWA guide dialog) */}
+      <Card className="border-primary/10">
+        <CardHeader>
+          <div className="flex items-center gap-2 text-primary">
+            <Smartphone className="h-5 w-5" />
+            <CardTitle className="text-lg">Приложение</CardTitle>
+          </div>
+          <CardDescription>
+            {appInstalled
+              ? `${BRAND_NAME} уже установлена на этом устройстве — спасибо!`
+              : `Иконка на главном экране телефона или отдельное окно на компьютере — ${BRAND_NAME} открывается без адресной строки`}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button
+            variant="secondary"
+            className="gap-1.5"
+            onClick={() => setInstallDialogOpen(true)}
+            data-testid="settings-install-app"
+          >
+            <Download className="h-4 w-4" />
+            Как установить
+          </Button>
         </CardContent>
       </Card>
 

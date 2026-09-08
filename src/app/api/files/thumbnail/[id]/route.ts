@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import path from "node:path";
 import { db } from "@/lib/db";
 import { getSession } from "@/lib/auth/session";
-import { getStorage } from "@/lib/storage";
+import { getStorage, getCachedLocalStorageRoot } from "@/lib/storage";
 import { rateLimit, getClientIp, LIMITS } from "@/lib/auth/rate-limit";
 import {
   shareVerifiedCookieKey,
@@ -13,6 +14,12 @@ import {
   thumbCacheKey,
   thumbEtag,
 } from "@/lib/cloud/thumbnail-cache";
+import {
+  extractPosterFrame,
+  probeVideo,
+  withMediaSlot,
+  type VideoProbe,
+} from "@/lib/media/ffmpeg";
 
 /**
  * Generate a small thumbnail for an image file.
@@ -129,7 +136,11 @@ export async function GET(
     return NextResponse.json({ error: "Не найдено" }, { status: 404 });
   }
 
-  if (!node.mimeType.startsWith("image/")) {
+  const mimeNorm = (node.mimeType ?? "").toLowerCase();
+  const isImage = mimeNorm.startsWith("image/");
+  const isVideo = mimeNorm.startsWith("video/");
+
+  if (!isImage && !isVideo) {
     return NextResponse.json({ error: "Не изображение" }, { status: 404 });
   }
 
@@ -140,7 +151,9 @@ export async function GET(
 
   // Share-token thumbs are still cacheable on disk server-side, but browsers
   // must not keep them after revoke (`no-store`).
-  const cacheVisibility = shareToken ? "no-store" : "private, max-age=86400";
+  // Authenticated thumbs: 1h + must-revalidate so a sharp-thumbnail deploy
+  // (cache version bump) propagates within an hour, not a day.
+  const cacheVisibility = shareToken ? "no-store" : "private, max-age=3600, must-revalidate";
 
   if (!shareToken) {
     const inm = req.headers.get("if-none-match");
@@ -175,6 +188,73 @@ export async function GET(
     // miss — generate below
   }
 
+  // ---- Video posters (optional ffmpeg integration). Graceful: no ffmpeg /
+  // unreadable file → 404 → the client FileThumb falls back to the icon.
+  if (isVideo) {
+    const root = getCachedLocalStorageRoot();
+    if (!root) {
+      return NextResponse.json({ error: "Не найдено" }, { status: 404 });
+    }
+
+    const filePath = path.join(root, node.storageKey);
+    // Best-effort: probe codec/duration, persist in DB for the UI; also gives
+    // us the duration we need to seek to a sane poster frame (~1/3 in).
+    let durationMs: number | null = null;
+    const probe = await probeVideo(filePath);
+    if (probe) {
+      durationMs = probe.durationMs;
+      await db.fileNode
+        .update({
+          where: { id: node.id },
+          data: {
+            videoCodec: probe.codec,
+            videoWidth: probe.width,
+            videoHeight: probe.height,
+            durationMs: probe.durationMs,
+          },
+        })
+        .catch(() => undefined);
+    }
+
+    const poster = await withMediaSlot(() => extractPosterFrame(filePath, durationMs));
+    if (!poster) {
+      return NextResponse.json({ error: "Не найдено" }, { status: 404 });
+    }
+
+    const sharp = (await import("sharp")).default;
+    let jpeg: Buffer;
+    try {
+      jpeg = await sharp(poster, { limitInputPixels: 100_000_000 })
+        .resize(size, size, { fit: "inside", withoutEnlargement: true })
+        .sharpen(0.8, 1, 1.2)
+        .jpeg({ quality: 85, mozjpeg: true })
+        .toBuffer();
+    } catch {
+      return NextResponse.json({ error: "Не удалось создать превью" }, { status: 500 });
+    }
+
+    // Best-effort cache write — serve even if disk is full.
+    try {
+      await storage.put(cacheKey, jpeg);
+      await pruneThumbCache(storage, node.id, cacheKey);
+    } catch {
+      // ignore
+    }
+
+    return new NextResponse(new Uint8Array(jpeg), {
+      status: 200,
+      headers: {
+        "Content-Type": "image/jpeg",
+        "Content-Length": String(jpeg.byteLength),
+        "Cache-Control": cacheVisibility,
+        ETag: etag,
+        "X-Content-Type-Options": "nosniff",
+        "X-Thumb-Cache": "MISS",
+      },
+    });
+  }
+
+  // ---- image path (sharp-based) ----
   const MAX_SOURCE_BYTES = 50 * 1024 * 1024;
   try {
     const stat = await storage.stat(node.storageKey);
@@ -197,7 +277,8 @@ export async function GET(
     jpeg = await sharp(source, { limitInputPixels: 100_000_000 })
       .rotate()
       .resize(size, size, { fit: "inside", withoutEnlargement: true })
-      .jpeg({ quality: 80, mozjpeg: true })
+      .sharpen(0.8, 1, 1.2)
+      .jpeg({ quality: 85, mozjpeg: true })
       .toBuffer();
   } catch {
     return NextResponse.json({ error: "Не удалось создать превью" }, { status: 500 });

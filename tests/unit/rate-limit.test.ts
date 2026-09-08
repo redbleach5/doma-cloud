@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, beforeEach, afterAll } from "bun:test";
 import {
   rateLimit,
   getClientIp,
@@ -102,6 +102,20 @@ describe("rateLimit", () => {
 });
 
 describe("getClientIp", () => {
+  const prevHops = process.env.TRUSTED_PROXY_HOPS;
+
+  // Bun auto-loads the repo's .env (TRUSTED_PROXY_HOPS=0 for this LAN-first
+  // deployment), which would make the header-based cases below fail. Pin the
+  // default trust model explicitly so these tests are deterministic.
+  beforeEach(() => {
+    process.env.TRUSTED_PROXY_HOPS = "1";
+  });
+
+  afterAll(() => {
+    if (prevHops === undefined) delete process.env.TRUSTED_PROXY_HOPS;
+    else process.env.TRUSTED_PROXY_HOPS = prevHops;
+  });
+
   it("returns the first IP from X-Forwarded-For", () => {
     const req = new Request("http://localhost", {
       headers: { "x-forwarded-for": "1.2.3.4, 5.6.7.8" },
@@ -143,5 +157,22 @@ describe("getClientIp", () => {
   it("returns 'unknown' when neither header is present", () => {
     const req = new Request("http://localhost");
     expect(getClientIp(req)).toBe("unknown");
+  });
+
+  it("ignores X-Forwarded-For entirely when hops=0 (no proxy in front)", () => {
+    process.env.TRUSTED_PROXY_HOPS = "0";
+    const req = new Request("http://localhost", {
+      headers: { "x-forwarded-for": "1.2.3.4", "x-real-ip": "9.9.9.9" },
+    });
+    expect(getClientIp(req)).toBe("unknown");
+  });
+
+  it("takes the Nth-from-the-right entry when hops>1 (RFC 7239 append mode)", () => {
+    process.env.TRUSTED_PROXY_HOPS = "2";
+    const req = new Request("http://localhost", {
+      headers: { "x-forwarded-for": "0.0.0.0, 1.2.3.4, 5.6.7.8" },
+    });
+    // client → cloudflare → nginx → app: the 2nd-from-the-right is the client.
+    expect(getClientIp(req)).toBe("1.2.3.4");
   });
 });

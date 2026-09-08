@@ -1,5 +1,7 @@
 # Doma Cloud
 
+[![CI](https://github.com/redbleach5/doma-cloud/actions/workflows/ci.yml/badge.svg)](https://github.com/redbleach5/doma-cloud/actions/workflows/ci.yml)
+
 Домашнее хранилище файлов: фото и файлы на диске, доступ из браузера (PWA).
 
 Техническое имя проекта и репозитория — `doma-cloud`.
@@ -189,6 +191,13 @@ bun run prod:smoke-ops    # backup/restore drill
 
 Подробнее — `tests/README.md`. Не запускайте голый `bun test` по всей папке.
 
+### CI (GitHub Actions)
+
+`.github/workflows/ci.yml` — на каждый push/PR: lint + typecheck (app и tests),
+unit-тесты, интеграционные тесты на чистой SQLite, затем production-build.
+`.github/workflows/e2e.yml` — Playwright (chromium) по расписанию (пн 03:00 UTC)
+или вручную со страницы Actions → E2E → Run workflow.
+
 ---
 
 ## Безопасность (кратко)
@@ -231,7 +240,7 @@ Caddyfile             # опциональный reverse proxy
 - [ ] Полнотекстовый поиск
 - [ ] 2FA для админа
 - [ ] Мультиселект и массовые операции
-- [ ] CI на GitHub
+- [x] CI на GitHub
 - [ ] Админ: квоты / orphan / статус cron
 
 ---

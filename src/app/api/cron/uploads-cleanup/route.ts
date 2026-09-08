@@ -9,7 +9,8 @@ import { safeSecretCompare } from "@/lib/auth/cron-secret";
  *
  * When a chunked upload is interrupted (browser closed, network lost, server
  * restart), partial chunks and session metadata stay under `.uploads/` forever.
- * This cron removes upload sessions whose newest file is older than 24 hours.
+ * This cron removes upload sessions whose newest file is older than 24 hours —
+ * a generous window so a long network outage doesn't destroy a resumable upload.
  *
  * Uses `storage.list(".uploads/")` when available; falls back to a
  * filesystem walk otherwise.

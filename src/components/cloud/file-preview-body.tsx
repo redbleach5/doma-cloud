@@ -199,6 +199,11 @@ function isBrowserPlayableVideo(mimeType: string): boolean {
     "video/mp4",      // H.264/AAC — самый поддерживаемый формат
     "video/webm",     // VP8/VP9 + Vorbis/Opus
     "video/ogg",      // Theora + Vorbis
+    // .mov с iPhone — все семейные видео. Chrome отвечает "" на canPlayType
+    // для quicktime, хотя его демуксер обычно тянет H.264 в MOV-контейнере;
+    // Safari/iOS играет нативно. Если кодек не декодируется (HEVC без
+    // аппаратной поддержки), <video> вызовет onError и UI покажет скачивание.
+    "video/quicktime",
   ]);
 
   // Быстрая проверка по известным типам
@@ -256,6 +261,28 @@ function VideoPreview({ url, mimeType }: { url: string; mimeType: string }) {
     );
   }
 
+  // Декодирование не удалось (например, HEVC-кодек внутри .mov на устройстве
+  // без аппаратной поддержки) — аккуратный фолбэк вместо чёрного плеера.
+  if (error) {
+    return (
+      <div className="flex flex-col items-center gap-4 p-8 text-center" data-testid="video-unsupported">
+        <div className="h-24 w-24 rounded-3xl bg-muted/60 flex items-center justify-center">
+          <AlertTriangle className="h-12 w-12 text-muted-foreground" />
+        </div>
+        <div>
+          <div className="font-medium">Видео не удалось воспроизвести</div>
+          <div className="text-sm text-muted-foreground mt-1">{error}</div>
+        </div>
+        <Button asChild>
+          <a href={url} download>
+            <Download className="h-4 w-4 mr-2" />
+            Скачать
+          </a>
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <video
       ref={ref}
@@ -266,9 +293,7 @@ function VideoPreview({ url, mimeType }: { url: string; mimeType: string }) {
       className="max-w-full max-h-full rounded-lg shadow-lg bg-black"
       playsInline
       onError={() => {
-        const videoEl = ref.current;
-        const errorMsg = videoEl?.error?.message || "Не удалось загрузить видео";
-        setError(errorMsg);
+        setError(ref.current?.error?.message || "Не удалось загрузить видео");
       }}
     >
       <source src={url} type={mimeType} />
@@ -435,7 +460,10 @@ function getUnsupportedFormatHint(mimeType: string): string {
   const lower = (mimeType ?? "").toLowerCase().split(";")[0].trim();
 
   // Видеоформаты, которые не поддерживаются браузером
-  if (lower.startsWith("video/") && !["video/mp4", "video/webm", "video/ogg"].includes(lower)) {
+  if (
+    lower.startsWith("video/") &&
+    !["video/mp4", "video/webm", "video/ogg", "video/quicktime"].includes(lower)
+  ) {
     return `Формат ${mimeType} не поддерживается браузером. Скачайте файл для просмотра в видеоплеере (VLC, MPC-HC и т.д.).`;
   }
 

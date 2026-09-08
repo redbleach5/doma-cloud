@@ -42,6 +42,57 @@ import path from "node:path";
  * concatenated on the final chunk into the permanent storage key.
  */
 
+
+/**
+ * Structured upload logging — writes to logs/upload-debug.log
+ * Helps diagnose client-side issues (network errors, size mismatches, etc.)
+ */
+async function logUploadEvent(event: {
+  level: "info" | "warn" | "error";
+  userId: string;
+  uploadId?: string;
+  fileName?: string;
+  fileSize?: number;
+  chunkIndex?: number;
+  chunkTotal?: number;
+  message: string;
+  error?: unknown;
+  durationMs?: number;
+}): Promise<void> {
+  try {
+    const logDir = path.join(process.cwd(), "logs");
+    await fs.mkdir(logDir, { recursive: true });
+    const ts = new Date().toISOString();
+    const parts = [
+      ts,
+      `[${event.level.toUpperCase()}]`,
+      `user=${event.userId}`,
+      event.uploadId ? `upload=${event.uploadId}` : null,
+      event.fileName ? `file="${event.fileName}"` : null,
+      event.fileSize ? `size=${event.fileSize}` : null,
+      event.chunkIndex !== undefined ? `chunk=${event.chunkIndex}/${event.chunkTotal}` : null,
+      event.durationMs !== undefined ? `duration=${event.durationMs}ms` : null,
+      event.message,
+    ].filter(Boolean);
+
+    let line = parts.join(" ");
+
+    if (event.error) {
+      const err = event.error instanceof Error
+        ? `${event.error.name}: ${event.error.message}\n${event.error.stack ?? ""}`
+        : String(event.error);
+      line += `\n  ERROR: ${err}`;
+    }
+
+    line += "\n";
+    await fs.appendFile(path.join(logDir, "upload-debug.log"), line);
+    console.log(`[upload] ${line.trim()}`);
+  } catch {
+    // swallow — logging must never break the upload
+  }
+}
+
+
 const MAX_CHUNK_SIZE = 64 * 1024 * 1024; // 64 MB hard cap per chunk
 
 interface ChunkMeta {
@@ -82,10 +133,18 @@ function parseMeta(req: NextRequest): ChunkMeta | null {
 }
 
 export async function POST(req: NextRequest) {
+  const requestStart = Date.now();
   const session = await getSession();
   if (!session) {
+    await logUploadEvent({
+      level: "warn",
+      userId: "anonymous",
+      message: "Unauthorized upload attempt",
+    });
     return NextResponse.json({ error: "Не авторизован" }, { status: 401 });
   }
+
+  const userId = session.sub;
 
   // Rate limit — dedicated bucket so large chunked uploads are not starved
   // by the multipart upload limit (100/min).
@@ -95,6 +154,11 @@ export async function POST(req: NextRequest) {
     LIMITS.uploadChunk.windowMs
   );
   if (!rl.allowed) {
+    await logUploadEvent({
+      level: "warn",
+      userId,
+      message: `Rate limited: ${rl.resetAt - Date.now()}ms remaining`,
+    });
     return NextResponse.json(
       { error: "Слишком много загрузок. Попробуйте через минуту." },
       {
@@ -106,11 +170,24 @@ export async function POST(req: NextRequest) {
 
   const meta = parseMeta(req);
   if (!meta) {
+    await logUploadEvent({
+      level: "warn",
+      userId,
+      message: "Invalid chunk headers",
+    });
     return NextResponse.json({ error: "Неверные заголовки чанка" }, { status: 400 });
   }
 
   const contentLength = parseInt(req.headers.get("content-length") ?? "0", 10);
   if (contentLength > MAX_CHUNK_SIZE) {
+    await logUploadEvent({
+      level: "warn",
+      userId,
+      uploadId: meta.uploadId,
+      fileName: meta.fileName,
+      fileSize: meta.fileSize,
+      message: `Chunk too large: ${contentLength} bytes (max ${MAX_CHUNK_SIZE})`,
+    });
     return NextResponse.json(
       { error: `Чанк слишком большой (макс ${MAX_CHUNK_SIZE / 1024 / 1024} МБ)` },
       { status: 413 }
@@ -181,6 +258,13 @@ export async function POST(req: NextRequest) {
         where: { id: parentId, ownerId: session.sub, isDirectory: true, deletedAt: null },
       });
       if (!parent) {
+        await logUploadEvent({
+          level: "warn",
+          userId,
+          uploadId: meta.uploadId,
+          fileName: meta.fileName,
+          message: `Parent folder not found: ${parentId}`,
+        });
         return NextResponse.json({ error: "Папка не найдена" }, { status: 404 });
       }
       effectiveParentId = parentId;
@@ -208,6 +292,14 @@ export async function POST(req: NextRequest) {
       effectiveOwnerId = sessionData.ownerId ?? session.sub;
       effectiveSharedFolderId = sessionData.sharedFolderId ?? null;
     } catch {
+      await logUploadEvent({
+        level: "warn",
+        userId,
+        uploadId: meta.uploadId,
+        fileName: meta.fileName,
+        chunkIndex: meta.chunkIndex,
+        message: "Session not found (expired or cleanup)",
+      });
       return NextResponse.json(
         { error: "Upload session not found. Restart the upload." },
         { status: 410 }
@@ -228,6 +320,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Пользователь не найден" }, { status: 404 });
     }
     if (user.usedBytes + BigInt(meta.fileSize) > user.quotaBytes) {
+      await logUploadEvent({
+        level: "warn",
+        userId,
+        uploadId: meta.uploadId,
+        fileName: meta.fileName,
+        fileSize: meta.fileSize,
+        message: `Quota exceeded: used=${user.usedBytes}, quota=${user.quotaBytes}, incoming=${meta.fileSize}`,
+      });
       return NextResponse.json(
         { error: "Превышен лимит места", detail: { quota: user.quotaBytes.toString(), used: user.usedBytes.toString(), incoming: meta.fileSize } },
         { status: 413 }
@@ -248,6 +348,18 @@ export async function POST(req: NextRequest) {
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Ошибка записи чанка";
+      await logUploadEvent({
+        level: "error",
+        userId,
+        uploadId: meta.uploadId,
+        fileName: meta.fileName,
+        fileSize: meta.fileSize,
+        chunkIndex: meta.chunkIndex,
+        chunkTotal: meta.chunkTotal,
+        message: `Failed to write chunk: ${msg}`,
+        error: err,
+        durationMs: Date.now() - requestStart,
+      });
       return NextResponse.json(
         { error: `Не удалось сохранить чанк: ${msg}` },
         { status: 500 }
@@ -257,6 +369,17 @@ export async function POST(req: NextRequest) {
 
   // If this is NOT the last chunk, acknowledge and wait for more.
   if (meta.chunkIndex < meta.chunkTotal - 1) {
+    await logUploadEvent({
+      level: "info",
+      userId,
+      uploadId: meta.uploadId,
+      fileName: meta.fileName,
+      fileSize: meta.fileSize,
+      chunkIndex: meta.chunkIndex,
+      chunkTotal: meta.chunkTotal,
+      message: "Chunk received OK",
+      durationMs: Date.now() - requestStart,
+    });
     return NextResponse.json({
       uploadId: meta.uploadId,
       chunkIndex: meta.chunkIndex,
@@ -282,6 +405,15 @@ export async function POST(req: NextRequest) {
       );
     }
     console.warn(`[upload-chunk] finalizing marker error for ${meta.uploadId}:`, err);
+    await logUploadEvent({
+      level: "error",
+      userId,
+      uploadId: meta.uploadId,
+      fileName: meta.fileName,
+      fileSize: meta.fileSize,
+      message: "Finalizing marker error",
+      error: err,
+    });
   }
 
   // LAST CHUNK — assemble the final file.
@@ -291,6 +423,14 @@ export async function POST(req: NextRequest) {
   // file belongs to the share owner, not the recipient).
   const user = await db.user.findUnique({ where: { id: effectiveOwnerId } });
   if (!user) {
+    await logUploadEvent({
+      level: "error",
+      userId,
+      uploadId: meta.uploadId,
+      fileName: meta.fileName,
+      fileSize: meta.fileSize,
+      message: `Owner not found: ${effectiveOwnerId}`,
+    });
     return NextResponse.json({ error: "Пользователь не найден" }, { status: 404 });
   }
 
@@ -302,6 +442,14 @@ export async function POST(req: NextRequest) {
       const freeBytes = BigInt(stat.bavail) * BigInt(stat.bsize);
       const needed = BigInt(meta.fileSize) * 2n;
       if (freeBytes < needed) {
+        await logUploadEvent({
+          level: "error",
+          userId,
+          uploadId: meta.uploadId,
+          fileName: meta.fileName,
+          fileSize: meta.fileSize,
+          message: `Insufficient disk space: need ${needed}, have ${freeBytes}`,
+        });
         return NextResponse.json(
           { error: "Недостаточно свободного места на диске для сборки файла" },
           { status: 507 }
@@ -363,6 +511,16 @@ export async function POST(req: NextRequest) {
       await storage.delete(ck).catch(() => undefined);
     }
     const msg = err instanceof Error ? err.message : "Ошибка сборки файла";
+    await logUploadEvent({
+      level: "error",
+      userId,
+      uploadId: meta.uploadId,
+      fileName: meta.fileName,
+      fileSize: meta.fileSize,
+      message: `Assembly failed: ${msg}`,
+      error: err,
+      durationMs: Date.now() - requestStart,
+    });
     return NextResponse.json(
       { error: `Не удалось собрать файл: ${msg}` },
       { status: 500 }
@@ -382,6 +540,15 @@ export async function POST(req: NextRequest) {
   // we delete below on mismatch (and best-effort on other failures).
   if (totalSize !== meta.fileSize) {
     await storage.delete(storageKey).catch(() => undefined);
+    await logUploadEvent({
+      level: "error",
+      userId,
+      uploadId: meta.uploadId,
+      fileName: meta.fileName,
+      fileSize: meta.fileSize,
+      message: `Size mismatch: expected ${meta.fileSize}, got ${totalSize} (${meta.chunkTotal} chunks)`,
+      durationMs: Date.now() - requestStart,
+    });
     return NextResponse.json(
       { error: `Размер файла не совпадает: ожидалось ${meta.fileSize}, получили ${totalSize}` },
       { status: 422 }
@@ -413,6 +580,16 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     await storage.delete(storageKey).catch(() => undefined);
     const msg = err instanceof Error ? err.message : "Ошибка записи в БД";
+    await logUploadEvent({
+      level: "error",
+      userId,
+      uploadId: meta.uploadId,
+      fileName: meta.fileName,
+      fileSize: meta.fileSize,
+      message: `Database error: ${msg}`,
+      error: err,
+      durationMs: Date.now() - requestStart,
+    });
     return NextResponse.json({ error: `Не удалось сохранить файл: ${msg}` }, { status: 500 });
   }
 
@@ -427,6 +604,15 @@ export async function POST(req: NextRequest) {
   if (quotaResult === 0) {
     await db.fileNode.delete({ where: { id: fileId } }).catch(() => undefined);
     await storage.delete(storageKey).catch(() => undefined);
+    await logUploadEvent({
+      level: "warn",
+      userId,
+      uploadId: meta.uploadId,
+      fileName: meta.fileName,
+      fileSize: meta.fileSize,
+      message: "Quota exceeded (concurrent upload race)",
+      durationMs: Date.now() - requestStart,
+    });
     return NextResponse.json(
       { error: "Превышен лимит места (конкурентная загрузка)" },
       { status: 413 }
@@ -439,6 +625,16 @@ export async function POST(req: NextRequest) {
     select: { usedBytes: true },
   });
   const newUsed = refreshed?.usedBytes ?? user.usedBytes + BigInt(totalSize);
+
+  await logUploadEvent({
+    level: "info",
+    userId,
+    uploadId: meta.uploadId,
+    fileName: meta.fileName,
+    fileSize: meta.fileSize,
+    message: `Upload finalized successfully: fileId=${node.id}, chunks=${meta.chunkTotal}, hash=${finalHash.slice(0, 16)}...`,
+    durationMs: Date.now() - requestStart,
+  });
 
   return NextResponse.json({
     uploadId: meta.uploadId,
@@ -517,6 +713,21 @@ export async function GET(req: NextRequest) {
     else if (idx > nextChunkIndex) break;
   }
 
+  // Original chunk size (chunk-0's byte length). The client re-slices the file
+  // with it when resuming so offsets match the original session — even if its
+  // CHUNK_SIZE constant changed between app versions (see the resume logic in
+  // src/lib/cloud/api.ts). Sourced from the stored chunk-0 file itself (not
+  // session.json), so pre-existing sessions are covered too. Only meaningful
+  // when chunk-0 exists — exactly the case nextChunkIndex > 0, which is the
+  // only case the client reads this field; otherwise null.
+  let chunkSize: number | null = null;
+  if (receivedChunks.length > 0 && receivedChunks[0] === 0) {
+    chunkSize = await storage
+      .stat(`${prefix}chunk-0`)
+      .then((s) => s.size)
+      .catch(() => null);
+  }
+
   return NextResponse.json({
     exists: true,
     uploadId,
@@ -526,6 +737,7 @@ export async function GET(req: NextRequest) {
     sharedFolderId: sessionData?.sharedFolderId ?? null,
     receivedChunks,
     nextChunkIndex,
+    chunkSize,
   });
 }
 

@@ -77,8 +77,8 @@ export async function listPendingUploads(ownerUserId: string): Promise<PendingUp
     const idx = store.index("byOwner");
     const rows = await idbReq(idx.getAll(ownerUserId));
     const list = (rows as PendingUploadRecord[]) ?? [];
-    // Drop stale entries approaching the server's 24h cleanup window.
-    const maxAgeMs = 23 * 3600_000;
+    // Drop stale entries approaching the server's 48h cleanup window.
+    const maxAgeMs = 47 * 3600_000;
     const now = Date.now();
     return list
       .filter((r) => now - r.updatedAt < maxAgeMs)

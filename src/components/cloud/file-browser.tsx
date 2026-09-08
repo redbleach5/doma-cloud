@@ -26,6 +26,8 @@ import { SettingsView } from "@/components/cloud/settings-view";
 import { AdminView } from "@/components/cloud/admin-view";
 import { MySharesView } from "@/components/cloud/my-shares-view";
 import { MoveDialog } from "@/components/cloud/move-dialog";
+import { InstallAppDialog } from "@/components/cloud/install-app-dialog";
+import { InstallHint } from "@/components/cloud/install-hint";
 import { SelectionToolbar } from "@/components/cloud/selection-toolbar";
 import { MobileBottomNav } from "@/components/cloud/mobile-bottom-nav";
 import { FileGridSkeleton, FileListSkeleton } from "@/components/cloud/file-skeletons";
@@ -71,6 +73,8 @@ export function FileBrowser({ user, onLogout, onUserUpdated }: Props) {
     > | undefined
   >(undefined);
   const [resumeBanner, setResumeBanner] = React.useState<PendingUploadRecord[] | null>(null);
+  // Guards per-user auto-resume so a remount can't start the same upload twice.
+  const autoResumedUserIdRef = React.useRef<string | null>(null);
   const [previewItem, setPreviewItem] = React.useState<FileItem | null>(null);
   const [shareItem, setShareItem] = React.useState<FileItem | null>(null);
 
@@ -240,7 +244,38 @@ export function FileBrowser({ user, onLogout, onUserUpdated }: Props) {
     if (fileInputRef.current) fileInputRef.current.value = "";
   }, [setUploadVisible]);
 
-  // After login / mount: offer to continue chunked uploads interrupted by tab close.
+  const startResumes = React.useCallback(
+    (records: PendingUploadRecord[]) => {
+      if (records.length === 0) return;
+      const map: Record<
+        string,
+        { uploadId: string; parentId: string | null; sharedFolderId: string | null }
+      > = {};
+      const files: File[] = [];
+      for (const rec of records) {
+        const file = blobToFile(rec);
+        files.push(file);
+        map[fileResumeKey(file)] = {
+          uploadId: rec.uploadId,
+          parentId: rec.parentId,
+          sharedFolderId: rec.sharedFolderId,
+        };
+      }
+      setResumeBanner(null);
+      setResumeByFileKey(map);
+      setPendingFiles(files);
+      setUploadVisible(true);
+      toast.message(
+        records.length === 1
+          ? `Продолжаю загрузку «${records[0].fileName}» автоматически`
+          : `Продолжаю ${records.length} загрузки автоматически`
+      );
+    },
+    [setUploadVisible]
+  );
+
+  // After login / mount: automatically continue chunked uploads that were
+  // interrupted by a tab close or a crash. No button press — fire-and-forget.
   React.useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -253,7 +288,15 @@ export function FileBrowser({ user, onLogout, onUserUpdated }: Props) {
           if (status.exists) stillAlive.push(rec);
           else await deletePendingUploads([rec.uploadId]).catch(() => undefined);
         }
-        if (!cancelled && stillAlive.length > 0) setResumeBanner(stillAlive);
+        if (cancelled || stillAlive.length === 0) return;
+        // Auto-start once per sign-in; a later remount of the same user shows
+        // the banner instead of silently double-starting the same uploads.
+        if (autoResumedUserIdRef.current !== user.id) {
+          autoResumedUserIdRef.current = user.id;
+          startResumes(stillAlive);
+        } else {
+          setResumeBanner(stillAlive);
+        }
       } catch {
         // IndexedDB / network — ignore quietly
       }
@@ -261,30 +304,12 @@ export function FileBrowser({ user, onLogout, onUserUpdated }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [user.id]);
+  }, [user.id, startResumes]);
 
-  const continueResumes = React.useCallback(async () => {
+  const continueResumes = React.useCallback(() => {
     if (!resumeBanner?.length) return;
-    const map: Record<
-      string,
-      { uploadId: string; parentId: string | null; sharedFolderId: string | null }
-    > = {};
-    const files: File[] = [];
-    for (const rec of resumeBanner) {
-      const file = blobToFile(rec);
-      files.push(file);
-      map[fileResumeKey(file)] = {
-        uploadId: rec.uploadId,
-        parentId: rec.parentId,
-        sharedFolderId: rec.sharedFolderId,
-      };
-    }
-    setResumeBanner(null);
-    setResumeByFileKey(map);
-    setPendingFiles(files);
-    setUploadVisible(true);
-    toast.message("Продолжаем незавершённые загрузки");
-  }, [resumeBanner, setUploadVisible]);
+    startResumes(resumeBanner);
+  }, [resumeBanner, startResumes]);
 
   const discardResumes = React.useCallback(async () => {
     if (!resumeBanner?.length) return;
@@ -1137,6 +1162,10 @@ export function FileBrowser({ user, onLogout, onUserUpdated }: Props) {
 
       {/* Atmospheric droplet burst when files are dropped */}
       <DropGlow />
+
+      {/* «Установить приложение» — guide dialog + one-time phone hint */}
+      <InstallAppDialog />
+      <InstallHint />
 
       <MobileBottomNav user={user} />
     </div>

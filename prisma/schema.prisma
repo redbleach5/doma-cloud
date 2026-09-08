@@ -52,6 +52,11 @@ model FileNode {
   sizeBytes   BigInt    @default(0)
   mimeType    String    @default("application/octet-stream")
   hashSha256  String?
+  // Video metadata (ffprobe, best-effort — null for non-video / unprobed files)
+  videoCodec  String?
+  videoWidth  Int?
+  videoHeight Int?
+  durationMs  Int?
   // Trash
   deletedAt   DateTime?
   deletedBy   String?

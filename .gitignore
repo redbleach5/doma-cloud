@@ -47,6 +47,9 @@ tsconfig.test.tsbuildinfo
 # Tooling artifacts
 eslint-report.json
 
+# Local tooling (large binaries, deployed separately — see src/lib/media/ffmpeg.ts)
+tools/
+
 # Testing
 coverage/
 test-results/

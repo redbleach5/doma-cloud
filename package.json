@@ -20,7 +20,7 @@
     "storage:migrate-keys": "bun scripts/storage-migrate-keys.mjs",
     "storage:verify": "bun scripts/storage-verify.mjs --orphans",
     "test:stress-upload": "bun scripts/stress-upload.mjs",
-    "test:setup": "bunx prisma db push --schema=prisma/schema.prisma --skip-generate",
+    "test:setup": "DATABASE_URL=file:./prisma/test.db bunx prisma db push --schema=prisma/schema.prisma --skip-generate",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
     "prod:health-win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prod/healthcheck.ps1",
     "prod:cron-win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prod/cron-run.ps1",

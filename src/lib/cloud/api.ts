@@ -182,7 +182,13 @@ async function apiFetch(
 
   if (res.status === 401 && !skipAuthRedirect) {
     handleUnauthorized();
-    throw new Error("Сессия истекла. Выполните вход снова.");
+    // Attach the status so upload-retry logic can treat it as permanent
+    // instead of auto-retrying a dead session forever.
+    const err = new Error("Сессия истекла. Выполните вход снова.") as Error & {
+      status?: number;
+    };
+    err.status = 401;
+    throw err;
   }
   return res;
 }
@@ -312,6 +318,14 @@ export const api = {
       }) => void | Promise<void>;
       /** Called after successful finalize so the client can drop IDB state. */
       onUploadComplete?: (info: { file: File; uploadId: string }) => void | Promise<void>;
+      /** Called when a chunk fails transiently and the uploader backs off. */
+      onChunkRetry?: (info: {
+        uploadId: string;
+        chunkIndex: number;
+        attempt: number;
+        delayMs: number;
+        reason: string;
+      }) => void | Promise<void>;
     }
   ): Promise<{ created: FileItem[]; usedBytes: string }> {
     const created: FileItem[] = [];
@@ -347,6 +361,9 @@ export const api = {
             onComplete: opts?.onUploadComplete
               ? (uploadId) => opts.onUploadComplete!({ file, uploadId })
               : undefined,
+            onChunkRetry: opts?.onChunkRetry
+              ? (info) => opts.onChunkRetry!(info)
+              : undefined,
           }
         );
         created.push(result.file);
@@ -379,6 +396,8 @@ export const api = {
     sharedFolderId: string | null;
     receivedChunks: number[];
     nextChunkIndex: number;
+    /** Byte size of the session's original chunk — resume must slice with it. */
+    chunkSize: number | null;
   }> {
     const res = await apiFetch(
       `/api/files/upload-chunk?uploadId=${encodeURIComponent(uploadId)}`,
@@ -394,6 +413,7 @@ export const api = {
         sharedFolderId: null,
         receivedChunks: [],
         nextChunkIndex: 0,
+        chunkSize: null,
       };
     }
     return jsonOrThrow(res);
@@ -853,13 +873,80 @@ export interface StorageStatus {
 /** Files smaller than this use simple multipart upload (one request). */
 const CHUNK_THRESHOLD = 8 * 1024 * 1024; // 8 MB
 
-/** Chunk size for large-file streaming uploads. */
-const CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB per chunk
+/** Chunk size for large-file streaming uploads. 16 MB cuts the request count
+ * ~3× vs the old 5 MB (fewer per-chunk round-trips and disk ops on slow
+ * links) while staying far below the 64 MB server cap. Resumed sessions may
+ * legitimately use a different size — uploadChunked adopts the session's
+ * original size reported by getUploadStatus. */
+const CHUNK_SIZE = 16 * 1024 * 1024; // 16 MB per chunk
 
-/** Max retries per chunk on transient network / rate-limit errors. */
-const MAX_CHUNK_RETRIES = 5;
+/**
+ * Transient chunk failures (network, timeout, 5xx, 429) retry automatically
+ * with backoff until the chunk lands — uploads self-heal without supervision.
+ * Backoff grows 2s → 4s → … capped at MAX_UPLOAD_BACKOFF_MS.
+ */
+const MAX_UPLOAD_BACKOFF_MS = 60_000;
+
+/** Cap on transparent full-file restarts after a server-side 410. */
+const MAX_FULL_RESTARTS = 3;
+
+/** Resolve after ms; ejects on AbortSignal (user cancel). */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("Загрузка отменена", "AbortError"));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("Загрузка отменена", "AbortError"));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** True when an HTTP status / error should be auto-retried, not surfaced. */
+function isTransientUploadError(err: unknown): boolean {
+  const status = (err as { status?: number })?.status;
+  if (status === undefined) return true; // network drop / timeout
+  return (
+    status === 408 ||
+    status === 409 ||
+    status === 425 ||
+    status === 429 ||
+    status >= 500
+  );
+}
 
 async function uploadSingle(
+  file: File,
+  parentId: string | null,
+  onProgress?: (pct: number) => void,
+  signal?: AbortSignal,
+  opts?: { sharedFolderId?: string }
+): Promise<{ created: FileItem[]; usedBytes: string }> {
+  // Small files use one multipart request. A dropped connection is safe to
+  // retry (the server persists files only after the FULL body arrives).
+  // Timeouts are NOT auto-retried — the request may have already landed.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await postSingleUpload(file, parentId, onProgress, signal, opts);
+    } catch (err) {
+      const isAbort = err instanceof DOMException && err.name === "AbortError";
+      if (isAbort || attempt >= 2 || signal?.aborted) throw err;
+      const isNetworkDrop =
+        (err as Error)?.message === "Сеть недоступна" || err instanceof TypeError;
+      if (!isNetworkDrop) throw err;
+      await sleep(2_000 * (attempt + 1), signal);
+    }
+  }
+}
+
+async function postSingleUpload(
   file: File,
   parentId: string | null,
   onProgress?: (pct: number) => void,
@@ -937,15 +1024,27 @@ async function uploadChunked(
       nextChunkIndex: number;
     }) => void | Promise<void>;
     onComplete?: (uploadId: string) => void | Promise<void>;
+    /** Called when a chunk hits a transient failure and we back off. */
+    onChunkRetry?: (info: {
+      uploadId: string;
+      chunkIndex: number;
+      attempt: number;
+      delayMs: number;
+      reason: string;
+    }) => void | Promise<void>;
   }
 ): Promise<{ file: FileItem; usedBytes: string }> {
-  const uploadId =
-    opts?.resumeUploadId ?? (await import("nanoid")).nanoid(16);
-  const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+  let chunkSize = CHUNK_SIZE;
+  let totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
   const params = new URLSearchParams();
   if (parentId) params.set("parentId", parentId);
   if (opts?.sharedFolderId) params.set("sharedFolderId", opts.sharedFolderId);
   const parentParam = `?${params}`;
+
+  // currentUploadId may change if the server wipes our session mid-flight
+  // (e.g. a >48h outage): we transparently restart with a fresh id.
+  let currentUploadId =
+    opts?.resumeUploadId ?? (await import("nanoid")).nanoid(16);
 
   let startIndex = 0;
   if (opts?.resumeUploadId) {
@@ -955,6 +1054,14 @@ async function uploadChunked(
         // Session expired — start a fresh uploadId but keep going with new id.
         // (Caller should have cleaned IDB; we still finish the upload.)
       } else {
+        // The session may have been created by an older client with a
+        // different CHUNK_SIZE. Offsets must match the ORIGINAL slicing or
+        // the assembled-size check on finalize fails and wipes progress.
+        // The server reports the original chunk size (chunk-0's byte length).
+        if (status.nextChunkIndex > 0 && status.chunkSize && status.chunkSize !== chunkSize) {
+          chunkSize = status.chunkSize;
+          totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
+        }
         startIndex = Math.min(status.nextChunkIndex, totalChunks);
         if (onProgress && startIndex > 0) {
           onProgress(Math.round((startIndex / totalChunks) * 100));
@@ -967,98 +1074,136 @@ async function uploadChunked(
 
   // Persist session bookmark before first new chunk (covers brand-new uploads).
   await opts?.onChunkProgress?.({
-    uploadId,
+    uploadId: currentUploadId,
     chunkTotal: totalChunks,
     nextChunkIndex: startIndex,
   });
 
-  for (let i = startIndex; i < totalChunks; i++) {
-    if (signal?.aborted) {
-      await api.abortUpload(uploadId).catch(() => undefined);
-      throw new DOMException("Загрузка отменена", "AbortError");
-    }
-    const start = i * CHUNK_SIZE;
-    const end = Math.min(start + CHUNK_SIZE, file.size);
-    const chunk = file.slice(start, end);
+  let fullRestarts = 0;
 
-    let lastErr: Error | null = null;
-    for (let attempt = 0; attempt < MAX_CHUNK_RETRIES; attempt++) {
+  uploadPass: for (let pass = 0; ; pass++) {
+    if (pass > 0) {
+      // Previous session vanished (HTTP 410). Restart from zero, new id.
+      currentUploadId = (await import("nanoid")).nanoid(16);
+      startIndex = 0;
+      await opts?.onChunkProgress?.({
+        uploadId: currentUploadId,
+        chunkTotal: totalChunks,
+        nextChunkIndex: 0,
+      });
+    }
+
+    for (let i = startIndex; i < totalChunks; i++) {
       if (signal?.aborted) {
-        await api.abortUpload(uploadId).catch(() => undefined);
+        await api.abortUpload(currentUploadId).catch(() => undefined);
         throw new DOMException("Загрузка отменена", "AbortError");
       }
-      try {
-        const res = await apiFetch(`/api/files/upload-chunk${parentParam}`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/octet-stream",
-            "X-Upload-Id": uploadId,
-            "X-File-Name": encodeURIComponent(file.name),
-            "X-File-Size": String(file.size),
-            "X-File-Mime": file.type || "application/octet-stream",
-            "X-Chunk-Index": String(i),
-            "X-Chunk-Total": String(totalChunks),
-          },
-          body: chunk,
-          signal,
-          timeoutMs: 5 * 60_000,
-        });
+      const start = i * chunkSize;
+      const end = Math.min(start + chunkSize, file.size);
+      const chunk = file.slice(start, end);
 
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          const err = new Error(body?.error ?? `HTTP ${res.status}`) as Error & {
-            status?: number;
-            retryAfterMs?: number;
-          };
-          err.status = res.status;
-          const retryAfter = res.headers.get("Retry-After");
-          if (retryAfter) {
-            const sec = parseInt(retryAfter, 10);
-            if (Number.isFinite(sec) && sec > 0) err.retryAfterMs = sec * 1000;
+      // Retry until the chunk lands, a permanent error occurs, or the user
+      // cancels. Transient failures (network, 5xx, 429, timeouts) wait with
+      // backoff and try again — the upload self-heals without supervision.
+      let attempt = 0;
+      for (;;) {
+        if (signal?.aborted) {
+          await api.abortUpload(currentUploadId).catch(() => undefined);
+          throw new DOMException("Загрузка отменена", "AbortError");
+        }
+        try {
+          const res = await apiFetch(`/api/files/upload-chunk${parentParam}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/octet-stream",
+              "X-Upload-Id": currentUploadId,
+              "X-File-Name": encodeURIComponent(file.name),
+              "X-File-Size": String(file.size),
+              "X-File-Mime": file.type || "application/octet-stream",
+              "X-Chunk-Index": String(i),
+              "X-Chunk-Total": String(totalChunks),
+            },
+            body: chunk,
+            signal,
+            timeoutMs: 5 * 60_000,
+          });
+
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            const err = new Error(body?.error ?? `HTTP ${res.status}`) as Error & {
+              status?: number;
+              retryAfterMs?: number;
+            };
+            err.status = res.status;
+            const retryAfter = res.headers.get("Retry-After");
+            if (retryAfter) {
+              const sec = parseInt(retryAfter, 10);
+              if (Number.isFinite(sec) && sec > 0) err.retryAfterMs = sec * 1000;
+            }
+            throw err;
           }
-          throw err;
-        }
 
-        const data = await res.json();
-        const next = i + 1;
-        await opts?.onChunkProgress?.({
-          uploadId,
-          chunkTotal: totalChunks,
-          nextChunkIndex: next,
-        });
-        if (onProgress) {
-          onProgress(Math.round((next / totalChunks) * 100));
-        }
-        lastErr = null;
-        if (data.finalized) {
-          await opts?.onComplete?.(uploadId);
-          return { file: data.file, usedBytes: data.usedBytes };
-        }
-        break;
-      } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") {
-          await api.abortUpload(uploadId).catch(() => undefined);
-          throw err;
-        }
-        lastErr = err instanceof Error ? err : new Error(String(err));
-        const status = (err as { status?: number })?.status;
-        const retryAfterMs = (err as { retryAfterMs?: number })?.retryAfterMs;
-        if (status === 429) {
-          await new Promise((r) =>
-            setTimeout(r, retryAfterMs ?? 2000 * (attempt + 1))
-          );
-        } else {
-          await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+          const data = await res.json();
+          const next = i + 1;
+          await opts?.onChunkProgress?.({
+            uploadId: currentUploadId,
+            chunkTotal: totalChunks,
+            nextChunkIndex: next,
+          });
+          if (onProgress) {
+            onProgress(Math.round((next / totalChunks) * 100));
+          }
+          if (data.finalized) {
+            await opts?.onComplete?.(currentUploadId);
+            return { file: data.file, usedBytes: data.usedBytes };
+          }
+          break; // chunk landed — move to the next one
+        } catch (err) {
+          if (err instanceof DOMException && err.name === "AbortError") {
+            // User cancelled — wipe the server-side temp session too.
+            await api.abortUpload(currentUploadId).catch(() => undefined);
+            throw err;
+          }
+          const status = (err as { status?: number })?.status;
+
+          if (status === 410) {
+            // Server dropped the session (cleanup / too-long outage). Restart
+            // the whole file with a fresh id instead of erroring out.
+            if (fullRestarts >= MAX_FULL_RESTARTS) {
+              throw new Error(
+                "Загрузка многократно прерывалась на сервере. Начните её заново."
+              );
+            }
+            fullRestarts += 1;
+            continue uploadPass;
+          }
+
+          // Permanent errors (quota 413, forbidden, bad request…) surface now.
+          if (status === 401 || !isTransientUploadError(err)) {
+            throw err;
+          }
+
+          attempt += 1;
+          const retryAfterMs = (err as { retryAfterMs?: number })?.retryAfterMs;
+          const delayMs =
+            retryAfterMs ?? Math.min(MAX_UPLOAD_BACKOFF_MS, 2_000 * 2 ** (attempt - 1));
+          await opts?.onChunkRetry?.({
+            uploadId: currentUploadId,
+            chunkIndex: i,
+            attempt,
+            delayMs,
+            reason:
+              status === 429
+                ? "лимит запросов"
+                : status
+                  ? `HTTP ${status}`
+                  : "сеть недоступна",
+          });
+          await sleep(delayMs, signal);
         }
       }
     }
-
-    if (lastErr) {
-      // Leave server session for later resume — do not abort on network failure.
-      throw new Error(
-        `Чанк ${i + 1}/${totalChunks} не загрузился после ${MAX_CHUNK_RETRIES} попыток: ${lastErr.message}`
-      );
-    }
+    break; // all chunks uploaded
   }
 
   throw new Error("Загрузка завершилась без финализации");
