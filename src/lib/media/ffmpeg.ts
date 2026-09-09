@@ -14,7 +14,11 @@ import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 
-const PROJECT_FALLBACK = "C:\\doma-cloud-main";
+// Last-resort fallback for a known local deployment layout. Override with
+// DOMA_PROJECT_ROOT (e.g. on a Linux mini-PC: DOMA_PROJECT_ROOT=/opt/doma)
+// or, better, point FFMPEG_PATH/FFPROBE_PATH at the binaries directly —
+// on Linux an `apt install ffmpeg` is found via PATH automatically.
+const PROJECT_FALLBACK = process.env.DOMA_PROJECT_ROOT || "C:\\doma-cloud-main";
 const TOOL_BIN_DIR = path.join("tools", "ffmpeg", "bin");
 
 interface FfmpegBins {

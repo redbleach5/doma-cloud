@@ -144,6 +144,20 @@ bun run prod:health-win
 
 По желанию: `Caddyfile` проксирует `:80` → приложение `:3000`. Снаружи сети — Tailscale / Funnel или свой домен. За proxy: `TRUSTED_PROXY_HOPS=1`.
 
+### Мини-ПК (Linux x86_64/arm64)
+
+Проект переносится без изменений кода — все платформенные ветки уже в коде
+(`/proc/mounts` вместо PowerShell, `fs.statfs`, парные `.sh`-скрипты).
+
+- **Bun**: `curl -fsSL https://bun.sh/install | bash` (та же версия, что в CI)
+- **Нативные зависимости** (`@node-rs/argon2`, `sharp`) — prebuilt-бинарники под Linux, компиляторы не нужны
+- **Сборка**: `bun run build` хватает ~1–2 ГБ ОЗУ сверх системы; на слабом боксе (2–4 ГБ) соберите на основном ПК и перенесите `.next/standalone` (плюс `.next/static` → `.next/standalone/.next/static`, `public/` → `.next/standalone/public/`)
+- **ffmpeg** для видео-постеров: `sudo apt install ffmpeg` — найдётся через PATH; папка `tools/ffmpeg/bin` — Windows-бинарники, в git не входит. Альтернативы: `FFMPEG_PATH`/`FFPROBE_PATH` или `DOMA_PROJECT_ROOT` (см. `.env.example`)
+- **Сервис**: `bun run prod:install-systemd` (сервис + бэкап-timer + cron-timer)
+- **Пути**: держите `DATABASE_URL` и `STORAGE_LOCAL_ROOT` абсолютными (Prisma резолвит относительный `file:` путь от папки схемы, не от cwd)
+- **Диски**: БД и thumbnails — на SSD, файлы — можно на HDD; перед отключением тома останавливайте сервис (WAL)
+- **Ограничение**: один процесс приложения (rate limiter in-memory) — для семьи более чем
+
 ---
 
 ## Авария / перенос диска
