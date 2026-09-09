@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getSession } from "@/lib/auth/session";
-import { getStorage, buildStorageKey, assertStorageKeyOwner, LocalFileStorage } from "@/lib/storage";
-import { sanitizeName, resolveFolderAccess, hasPermission } from "@/lib/cloud/tree";
-import { guessMime } from "@/lib/cloud/mime";
+import { getStorage } from "@/lib/storage";
+import { resolveFolderAccess, hasPermission } from "@/lib/cloud/tree";
+import {
+  checkDiskSpace,
+  enforceQuotaAtomically,
+  loadQuotaAccount,
+  persistMultipartFiles,
+  quotaExceededDetail,
+  quotaWouldExceed,
+  rollbackStoredFiles,
+} from "@/lib/cloud/upload-core";
 import { rateLimit, LIMITS } from "@/lib/auth/rate-limit";
-import { randomUUID } from "node:crypto";
-import { promises as fs } from "node:fs";
 
 /**
  * Streaming multipart upload endpoint.
@@ -73,25 +79,16 @@ export async function POST(req: NextRequest) {
   }
 
   // Pre-check quota using Content-Length header BEFORE parsing the body.
-  const contentLength = parseInt(req.headers.get("content-length") ?? "0", 10);
-  const user = await db.user.findUnique({ where: { id: session.sub } });
+  // Uses the cached `usedBytes` column — maintained incrementally by
+  // upload/delete, O(1) instead of O(N) tree traversal.
+  const user = await loadQuotaAccount(session.sub);
   if (!user) {
     return NextResponse.json({ error: "Пользователь не найден" }, { status: 404 });
   }
-
-  // Use the cached `usedBytes` column for quota check — maintained
-  // incrementally by upload/delete, O(1) instead of O(N) tree traversal.
-  const usedBytes = user.usedBytes;
-  if (contentLength > 0 && usedBytes + BigInt(contentLength) > user.quotaBytes) {
+  const contentLength = parseInt(req.headers.get("content-length") ?? "0", 10);
+  if (contentLength > 0 && quotaWouldExceed(user, contentLength)) {
     return NextResponse.json(
-      {
-        error: "Превышен лимит места",
-        detail: {
-          quota: user.quotaBytes.toString(),
-          used: usedBytes.toString(),
-          incoming: contentLength,
-        },
-      },
+      { error: "Превышен лимит места", detail: quotaExceededDetail(user, contentLength) },
       { status: 413 }
     );
   }
@@ -106,72 +103,46 @@ export async function POST(req: NextRequest) {
 
   // Double-check quota using actual file sizes (more accurate than Content-Length).
   const totalIncoming = files.reduce((sum, f) => sum + f.size, 0);
-  if (usedBytes + BigInt(totalIncoming) > user.quotaBytes) {
+  if (quotaWouldExceed(user, totalIncoming)) {
     return NextResponse.json(
-      {
-        error: "Превышен лимит места",
-        detail: {
-          quota: user.quotaBytes.toString(),
-          used: usedBytes.toString(),
-          incoming: totalIncoming,
-        },
-      },
+      { error: "Превышен лимит места", detail: quotaExceededDetail(user, totalIncoming) },
       { status: 413 }
     );
   }
 
   // Disk space pre-check before writing bytes.
   const storage = await getStorage();
-  if (storage instanceof LocalFileStorage) {
-    const root = storage.getRoot();
-    try {
-      const stat = await fs.statfs(root);
-      const freeBytes = stat.bsize * stat.bavail;
-      if (BigInt(freeBytes) < BigInt(totalIncoming) * 2n) {
-        return NextResponse.json(
-          {
-            error: "Недостаточно места на диске",
-            detail: { free: freeBytes, needed: totalIncoming },
-          },
-          { status: 507 }
-        );
-      }
-    } catch {
-      // statfs not available on some platforms — skip the check.
-    }
+  const disk = await checkDiskSpace(storage, BigInt(totalIncoming));
+  if (!disk.ok) {
+    return NextResponse.json(
+      {
+        error: "Недостаточно места на диске",
+        detail: { free: Number(disk.freeBytes), needed: totalIncoming },
+      },
+      { status: 507 }
+    );
   }
 
-  const created = await persistFiles(files, parentId, user.id, storage);
-
+  const created = await persistMultipartFiles(files, parentId, user.id, storage);
   if ("error" in created) {
     return NextResponse.json({ error: created.error }, { status: created.status });
   }
 
-  // ATOMIC quota enforcement — conditional UPDATE prevents TOCTOU races.
-  const totalStored = created.created.reduce(
-    (sum, c) => sum + BigInt(c.sizeBytes),
-    0n
-  );
-  const quotaResult = await db.$executeRaw`
-    UPDATE User
-    SET usedBytes = usedBytes + ${totalStored}
-    WHERE id = ${user.id}
-      AND usedBytes + ${totalStored} <= quotaBytes
-  `;
-  if (quotaResult === 0) {
-    for (const c of created.created) {
-      const sk = buildStorageKey(user.id, c.id, c.name);
-      await storage.delete(sk).catch(() => undefined);
-    }
-    for (const c of created.created) {
-      await db.fileNode.delete({ where: { id: c.id } }).catch(() => undefined);
-    }
+  // ATOMIC quota enforcement — see upload-core. On race loss, roll back the
+  // whole batch (storage objects first, then FileNode rows).
+  const totalStored = created.created.reduce((sum, c) => sum + BigInt(c.sizeBytes), 0n);
+  const enforcement = await enforceQuotaAtomically(user.id, totalStored);
+  if (!enforcement.enforced) {
+    await rollbackStoredFiles(
+      created.created.map((c) => ({ id: c.id, ownerId: user.id, name: c.name })),
+      storage
+    );
     return NextResponse.json(
       { error: "Превышен лимит места (конкурентная загрузка)" },
       { status: 413 }
     );
   }
-  const newUsed = usedBytes + totalStored;
+  const newUsed = enforcement.usedBytes ?? user.usedBytes + totalStored;
 
   return NextResponse.json({ created: created.created, usedBytes: newUsed.toString() });
 }
@@ -226,21 +197,17 @@ async function uploadIntoShared(
   }
 
   // The file is owned by the SHARE OWNER — counts against their quota.
-  const owner = await db.user.findUnique({ where: { id: share.ownerId } });
+  const owner = await loadQuotaAccount(share.ownerId);
   if (!owner) {
     return NextResponse.json({ error: "Владелец не найден" }, { status: 404 });
   }
 
   const contentLength = parseInt(req.headers.get("content-length") ?? "0", 10);
-  if (contentLength > 0 && owner.usedBytes + BigInt(contentLength) > owner.quotaBytes) {
+  if (contentLength > 0 && quotaWouldExceed(owner, contentLength)) {
     return NextResponse.json(
       {
         error: "Превышен лимит места у владельца папки",
-        detail: {
-          quota: owner.quotaBytes.toString(),
-          used: owner.usedBytes.toString(),
-          incoming: contentLength,
-        },
+        detail: quotaExceededDetail(owner, contentLength),
       },
       { status: 413 }
     );
@@ -253,140 +220,49 @@ async function uploadIntoShared(
   }
 
   const totalIncoming = files.reduce((sum, f) => sum + f.size, 0);
-  if (owner.usedBytes + BigInt(totalIncoming) > owner.quotaBytes) {
+  if (quotaWouldExceed(owner, totalIncoming)) {
     return NextResponse.json(
       {
         error: "Превышен лимит места у владельца папки",
-        detail: {
-          quota: owner.quotaBytes.toString(),
-          used: owner.usedBytes.toString(),
-          incoming: totalIncoming,
-        },
+        detail: quotaExceededDetail(owner, totalIncoming),
       },
       { status: 413 }
     );
   }
 
+  // Disk space pre-check before writing bytes.
   const storage = await getStorage();
-  if (storage instanceof LocalFileStorage) {
-    const root = storage.getRoot();
-    try {
-      const stat = await fs.statfs(root);
-      const freeBytes = stat.bsize * stat.bavail;
-      if (BigInt(freeBytes) < BigInt(totalIncoming) * 2n) {
-        return NextResponse.json(
-          {
-            error: "Недостаточно места на диске",
-            detail: { free: freeBytes, needed: totalIncoming },
-          },
-          { status: 507 }
-        );
-      }
-    } catch {
-      // ignore
-    }
+  const disk = await checkDiskSpace(storage, BigInt(totalIncoming));
+  if (!disk.ok) {
+    return NextResponse.json(
+      {
+        error: "Недостаточно места на диске",
+        detail: { free: Number(disk.freeBytes), needed: totalIncoming },
+      },
+      { status: 507 }
+    );
   }
 
   // Persist files owned by the share owner.
-  const result = await persistFiles(files, effectiveParentId, owner.id, storage);
+  const result = await persistMultipartFiles(files, effectiveParentId, owner.id, storage);
   if ("error" in result) {
     return NextResponse.json({ error: result.error }, { status: result.status });
   }
 
+  // ATOMIC quota enforcement against the OWNER's account — see upload-core.
   const totalStored = result.created.reduce((sum, c) => sum + BigInt(c.sizeBytes), 0n);
-  const quotaResult = await db.$executeRaw`
-    UPDATE User
-    SET usedBytes = usedBytes + ${totalStored}
-    WHERE id = ${owner.id}
-      AND usedBytes + ${totalStored} <= quotaBytes
-  `;
-  if (quotaResult === 0) {
-    for (const c of result.created) {
-      const sk = buildStorageKey(owner.id, c.id, c.name);
-      await storage.delete(sk).catch(() => undefined);
-    }
-    for (const c of result.created) {
-      await db.fileNode.delete({ where: { id: c.id } }).catch(() => undefined);
-    }
+  const enforcement = await enforceQuotaAtomically(owner.id, totalStored);
+  if (!enforcement.enforced) {
+    await rollbackStoredFiles(
+      result.created.map((c) => ({ id: c.id, ownerId: owner.id, name: c.name })),
+      storage
+    );
     return NextResponse.json(
       { error: "Превышен лимит места у владельца (конкурентная загрузка)" },
       { status: 413 }
     );
   }
-  const newUsed = owner.usedBytes + totalStored;
+  const newUsed = enforcement.usedBytes ?? owner.usedBytes + totalStored;
 
   return NextResponse.json({ created: result.created, usedBytes: newUsed.toString() });
-}
-
-// ---------------------------------------------------------------------------
-// Shared persistence helper (used by both owner and shared-folder paths).
-// ---------------------------------------------------------------------------
-
-async function persistFiles(
-  files: File[],
-  parentId: string | null,
-  ownerId: string,
-  storage: Awaited<ReturnType<typeof getStorage>>
-): Promise<
-  | { created: Array<{ id: string; name: string; sizeBytes: string; mimeType: string }> }
-  | { error: string; status: number }
-> {
-  const created: Array<{ id: string; name: string; sizeBytes: string; mimeType: string }> = [];
-
-  const rollbackCreated = async () => {
-    for (const c of created) {
-      const sk = buildStorageKey(ownerId, c.id, c.name);
-      await storage.delete(sk).catch(() => undefined);
-      await db.fileNode.delete({ where: { id: c.id } }).catch(() => undefined);
-    }
-  };
-
-  for (const file of files) {
-    const safeName = sanitizeName(file.name);
-    const fileId = randomUUID();
-    const storageKey = buildStorageKey(ownerId, fileId, safeName);
-    // Hard guard: never write outside the owner's own directory.
-    assertStorageKeyOwner(storageKey, ownerId);
-    const mimeType = file.type || guessMime(safeName);
-
-    let result;
-    try {
-      result = await storage.put(storageKey, file.stream() as unknown as import("node:stream/web").ReadableStream<Uint8Array>);
-    } catch (err) {
-      await rollbackCreated();
-      const msg = err instanceof Error ? err.message : "Ошибка записи";
-      return { error: `Не удалось сохранить «${safeName}»: ${msg}`, status: 500 };
-    }
-
-    let node;
-    try {
-      node = await db.fileNode.create({
-        data: {
-          id: fileId,
-          ownerId,
-          parentId,
-          name: safeName,
-          storageKey,
-          isDirectory: false,
-          sizeBytes: BigInt(result.sizeBytes),
-          mimeType,
-          hashSha256: result.hashSha256,
-        },
-      });
-    } catch (dbErr) {
-      await storage.delete(storageKey).catch(() => undefined);
-      await rollbackCreated();
-      console.error("[upload] DB write failed, rolled back batch:", dbErr);
-      return { error: "Ошибка базы данных при записи файла", status: 500 };
-    }
-
-    created.push({
-      id: node.id,
-      name: node.name,
-      sizeBytes: node.sizeBytes.toString(),
-      mimeType: node.mimeType,
-    });
-  }
-
-  return { created };
 }

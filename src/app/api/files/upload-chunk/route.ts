@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getSession } from "@/lib/auth/session";
 import { getStorage, buildStorageKey, assertStorageKeyOwner, getCachedLocalStorageRoot, LocalFileStorage } from "@/lib/storage";
+import { checkDiskSpace, enforceQuotaAtomically, loadQuotaAccount, quotaExceededDetail, quotaWouldExceed, rollbackStoredFiles } from "@/lib/cloud/upload-core";
 import { sanitizeName, resolveFolderAccess, hasPermission } from "@/lib/cloud/tree";
 import { guessMime } from "@/lib/cloud/mime";
 import { rateLimit, LIMITS } from "@/lib/auth/rate-limit";
@@ -315,21 +316,21 @@ export async function POST(req: NextRequest) {
   // For shared-folder uploads, quota is checked against the OWNER's account
   // (the resulting FileNode is owned by them, not the recipient).
   if (meta.chunkIndex === 0) {
-    const user = await db.user.findUnique({ where: { id: effectiveOwnerId } });
-    if (!user) {
+    const account = await loadQuotaAccount(effectiveOwnerId);
+    if (!account) {
       return NextResponse.json({ error: "Пользователь не найден" }, { status: 404 });
     }
-    if (user.usedBytes + BigInt(meta.fileSize) > user.quotaBytes) {
+    if (quotaWouldExceed(account, meta.fileSize)) {
       await logUploadEvent({
         level: "warn",
         userId,
         uploadId: meta.uploadId,
         fileName: meta.fileName,
         fileSize: meta.fileSize,
-        message: `Quota exceeded: used=${user.usedBytes}, quota=${user.quotaBytes}, incoming=${meta.fileSize}`,
+        message: `Quota exceeded: used=${account.usedBytes}, quota=${account.quotaBytes}, incoming=${meta.fileSize}`,
       });
       return NextResponse.json(
-        { error: "Превышен лимит места", detail: { quota: user.quotaBytes.toString(), used: user.usedBytes.toString(), incoming: meta.fileSize } },
+        { error: "Превышен лимит места", detail: quotaExceededDetail(account, meta.fileSize) },
         { status: 413 }
       );
     }
@@ -421,7 +422,7 @@ export async function POST(req: NextRequest) {
   // IMPORTANT: we look up the OWNER's user record (which may be different
   // from the authenticated user when uploading into a shared folder — the
   // file belongs to the share owner, not the recipient).
-  const user = await db.user.findUnique({ where: { id: effectiveOwnerId } });
+  const user = await loadQuotaAccount(effectiveOwnerId);
   if (!user) {
     await logUploadEvent({
       level: "error",
@@ -434,30 +435,22 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Пользователь не найден" }, { status: 404 });
   }
 
-  // Disk-space pre-check before assembly.
-  const localRoot = getCachedLocalStorageRoot();
-  if (localRoot) {
-    try {
-      const stat = await fs.statfs(localRoot);
-      const freeBytes = BigInt(stat.bavail) * BigInt(stat.bsize);
-      const needed = BigInt(meta.fileSize) * 2n;
-      if (freeBytes < needed) {
-        await logUploadEvent({
-          level: "error",
-          userId,
-          uploadId: meta.uploadId,
-          fileName: meta.fileName,
-          fileSize: meta.fileSize,
-          message: `Insufficient disk space: need ${needed}, have ${freeBytes}`,
-        });
-        return NextResponse.json(
-          { error: "Недостаточно свободного места на диске для сборки файла" },
-          { status: 507 }
-        );
-      }
-    } catch {
-      // statfs may fail on exotic filesystems — don't block the upload.
-    }
+  // Disk-space pre-check before assembly (2× headroom: chunks + final copy
+  // coexist on disk during the concat — see upload-core).
+  const disk = await checkDiskSpace(storage, BigInt(meta.fileSize));
+  if (!disk.ok) {
+    await logUploadEvent({
+      level: "error",
+      userId,
+      uploadId: meta.uploadId,
+      fileName: meta.fileName,
+      fileSize: meta.fileSize,
+      message: `Insufficient disk space: need ${disk.neededBytes}, have ${disk.freeBytes}`,
+    });
+    return NextResponse.json(
+      { error: "Недостаточно свободного места на диске для сборки файла" },
+      { status: 507 }
+    );
   }
 
   const safeName = sanitizeName(meta.fileName);
@@ -593,17 +586,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `Не удалось сохранить файл: ${msg}` }, { status: 500 });
   }
 
-  // ATOMIC quota enforcement — conditional UPDATE. If 0 rows are affected,
-  // a concurrent upload won the race; roll back the FileNode + storage object.
-  const quotaResult = await db.$executeRaw`
-    UPDATE User
-    SET usedBytes = usedBytes + ${BigInt(totalSize)}
-    WHERE id = ${user.id}
-      AND usedBytes + ${BigInt(totalSize)} <= quotaBytes
-  `;
-  if (quotaResult === 0) {
-    await db.fileNode.delete({ where: { id: fileId } }).catch(() => undefined);
-    await storage.delete(storageKey).catch(() => undefined);
+  // ATOMIC quota enforcement — see upload-core. If the claim is lost, a
+  // concurrent upload consumed the quota first; roll back the FileNode +
+  // storage object (storage first, then DB rows — see core rationale).
+  const enforcement = await enforceQuotaAtomically(user.id, BigInt(totalSize));
+  if (!enforcement.enforced) {
+    await rollbackStoredFiles([{ id: fileId, ownerId: user.id, name: node.name }], storage);
     await logUploadEvent({
       level: "warn",
       userId,
@@ -619,12 +607,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Read the freshly-updated usedBytes to return to the client.
-  const refreshed = await db.user.findUnique({
-    where: { id: user.id },
-    select: { usedBytes: true },
-  });
-  const newUsed = refreshed?.usedBytes ?? user.usedBytes + BigInt(totalSize);
+  const newUsed = enforcement.usedBytes ?? user.usedBytes + BigInt(totalSize);
 
   await logUploadEvent({
     level: "info",
