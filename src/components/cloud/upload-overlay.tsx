@@ -37,8 +37,16 @@ interface UploadState {
   status: "pending" | "uploading" | "done" | "error";
   progress: number;
   error?: string;
-  /** Set while a chunk is being auto-retried after a transient failure. */
-  retrying?: { attempt: number; delayMs: number; reason?: string } | null;
+  /** Set while a chunk attempt is in flight or waiting for backoff. */
+  retrying?: {
+    attempt: number;
+    delayMs: number;
+    reason?: string;
+    /** "waiting" — parked for backoff; "sending" — POST in flight. */
+    phase: "waiting" | "sending";
+    /** Wall-clock timestamp (ms) when the next attempt fires (waiting only). */
+    nextAt?: number;
+  } | null;
   /** Server-side upload session id — lets us resume the SAME session on retry. */
   uploadId?: string;
   /** True when the upload hit a transient error and is waiting to auto-retry. */
@@ -222,7 +230,7 @@ export function UploadOverlay({
         [fileId]: {
           ...cur,
           status: "uploading",
-          retrying: { attempt, delayMs, reason },
+          retrying: { attempt, delayMs, reason, phase: "waiting", nextAt: Date.now() + delayMs },
           waitingForRetry: true,
         },
       };
@@ -321,6 +329,26 @@ export function UploadOverlay({
                         attempt: info.attempt,
                         delayMs: info.delayMs,
                         reason: info.reason,
+                        phase: "waiting",
+                        nextAt: Date.now() + info.delayMs,
+                      },
+                    },
+                  };
+                });
+              },
+              onChunkAttempt: async (info) => {
+                setStates((s) => {
+                  const prev = s[entry.id];
+                  return {
+                    ...s,
+                    [entry.id]: {
+                      status: "uploading",
+                      progress: prev?.progress ?? 0,
+                      retrying: {
+                        attempt: info.attempt,
+                        delayMs: 0,
+                        reason: "передача данных",
+                        phase: "sending",
                       },
                     },
                   };
@@ -455,6 +483,34 @@ export function UploadOverlay({
     handleRetryRef.current = handleRetry;
   }, [handleRetry]);
 
+  // Honest connection state — lets the UI say "no network, will continue
+  // automatically" instead of a frozen spinner that reads as a stall.
+  const [isOnline, setIsOnline] = React.useState(
+    () => typeof navigator === "undefined" || navigator.onLine
+  );
+  React.useEffect(() => {
+    const up = () => setIsOnline(true);
+    const down = () => setIsOnline(false);
+    window.addEventListener("online", up);
+    window.addEventListener("offline", down);
+    return () => {
+      window.removeEventListener("online", up);
+      window.removeEventListener("offline", down);
+    };
+  }, []);
+
+  // Re-render every second while a retry countdown is on screen, so the
+  // "повтор через N с" text actually counts down instead of freezing.
+  const [, bumpTick] = React.useReducer((x: number) => x + 1, 0);
+  const anyCountdown = Object.values(states).some(
+    (s) => s.retrying && s.retrying.phase === "waiting"
+  );
+  React.useEffect(() => {
+    if (!anyCountdown) return;
+    const t = setInterval(bumpTick, 1000);
+    return () => clearInterval(t);
+  }, [anyCountdown]);
+
   // When the tab returns to foreground (e.g. the browser froze it in the
   // background and killed the in-flight fetch), immediately resume uploads
   // that are waiting for an auto-retry. ONLY those: untouched queue entries
@@ -581,9 +637,18 @@ export function UploadOverlay({
                     <div className="flex items-center gap-1.5 mt-1 text-[11px] text-amber-600 dark:text-amber-400">
                       <WifiOff className="h-3 w-3 shrink-0" />
                       <span className="truncate">
-                        Сеть нестабильна — повторяю попытку {st.retrying.attempt} через ~
-                        {Math.max(1, Math.round(st.retrying.delayMs / 1000))} с…
+                        {!isOnline
+                          ? "Нет подключения — продолжу, когда сеть вернётся"
+                          : st.retrying.phase === "sending"
+                            ? `Попытка ${st.retrying.attempt}: передаю данные…`
+                            : `Попытка ${st.retrying.attempt} через ${Math.max(0, Math.ceil(((st.retrying.nextAt ?? Date.now()) - Date.now()) / 1000))} с — ${st.retrying.reason ?? "сбой сети"}`}
                       </span>
+                    </div>
+                  )}
+                  {st.status === "uploading" && !st.retrying && !isOnline && (
+                    <div className="flex items-center gap-1.5 mt-1 text-[11px] text-amber-600 dark:text-amber-400">
+                      <WifiOff className="h-3 w-3 shrink-0" />
+                      <span className="truncate">Нет подключения — возобновлю автоматически</span>
                     </div>
                   )}
                   {st.status === "done" && (

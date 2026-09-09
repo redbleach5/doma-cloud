@@ -326,6 +326,12 @@ export const api = {
         delayMs: number;
         reason: string;
       }) => void | Promise<void>;
+      /** Called right before each chunk POST so the UI can show "in flight". */
+      onChunkAttempt?: (info: {
+        uploadId: string;
+        chunkIndex: number;
+        attempt: number;
+      }) => void | Promise<void>;
     }
   ): Promise<{ created: FileItem[]; usedBytes: string }> {
     const created: FileItem[] = [];
@@ -363,6 +369,9 @@ export const api = {
               : undefined,
             onChunkRetry: opts?.onChunkRetry
               ? (info) => opts.onChunkRetry!(info)
+              : undefined,
+            onChunkAttempt: opts?.onChunkAttempt
+              ? (info) => opts.onChunkAttempt!(info)
               : undefined,
           }
         );
@@ -890,6 +899,34 @@ const MAX_UPLOAD_BACKOFF_MS = 60_000;
 /** Cap on transparent full-file restarts after a server-side 410. */
 const MAX_FULL_RESTARTS = 3;
 
+/**
+ * Wait until the browser reports connectivity again (navigator.onLine).
+ * While offline the retry loop must not hammer the network with doomed
+ * fetches — instead it parks here and resumes instantly on the `online`
+ * event (5s poll fallback in case the event is missed). Ejects on Abort.
+ */
+async function waitForOnline(signal?: AbortSignal): Promise<void> {
+  if (typeof navigator === "undefined" || typeof window === "undefined") return;
+  if (navigator.onLine) return;
+  await new Promise<void>((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      window.removeEventListener("online", finish);
+      clearInterval(poll);
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    const onAbort = () => finish();
+    const poll = setInterval(() => {
+      if (navigator.onLine) finish();
+    }, 5_000);
+    window.addEventListener("online", finish, { once: true });
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 /** Resolve after ms; ejects on AbortSignal (user cancel). */
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -1032,6 +1069,13 @@ async function uploadChunked(
       delayMs: number;
       reason: string;
     }) => void | Promise<void>;
+    /** Called right before each chunk POST (attempt starts) so the UI can
+     *  distinguish "in flight" from "waiting for backoff". */
+    onChunkAttempt?: (info: {
+      uploadId: string;
+      chunkIndex: number;
+      attempt: number;
+    }) => void | Promise<void>;
   }
 ): Promise<{ file: FileItem; usedBytes: string }> {
   let chunkSize = CHUNK_SIZE;
@@ -1112,6 +1156,9 @@ async function uploadChunked(
           throw new DOMException("Загрузка отменена", "AbortError");
         }
         try {
+          // Surface "attempt in flight" — without this a hanging request
+          // looks like a frozen bar with no explanation at all.
+          opts?.onChunkAttempt?.({ uploadId: currentUploadId, chunkIndex: i, attempt });
           const res = await apiFetch(`/api/files/upload-chunk${parentParam}`, {
             method: "POST",
             headers: {
@@ -1199,6 +1246,13 @@ async function uploadChunked(
                   ? `HTTP ${status}`
                   : "сеть недоступна",
           });
+          // While the network is down, park until connectivity returns —
+          // doomed fetches waste battery and produce no information. The
+          // `online` event resumes the loop instantly; the regular backoff
+          // still applies afterwards (keeps server pressure polite).
+          if (typeof navigator !== "undefined" && !navigator.onLine) {
+            await waitForOnline(signal);
+          }
           await sleep(delayMs, signal);
         }
       }
